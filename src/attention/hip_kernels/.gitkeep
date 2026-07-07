@@ -1,0 +1,4 @@
+# Place HIP kernel source files here:
+# - dcu_flash_attn.cpp   : FlashAttention forward kernel (HIP C++)
+# - dcu_paged_attn.cpp   : PagedAttention kernel for decode
+# - dcu_fused_linear.cpp : Fused Linear+Activation kernel

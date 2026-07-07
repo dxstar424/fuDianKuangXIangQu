@@ -1,0 +1,29 @@
+# ============================================================
+# BASELINE 配置 - vLLM 0.18.1 默认参数
+# ============================================================
+
+model:
+  name: "Qwen3.5-27B"
+  dtype: "bf16"
+  max_model_len: 32768
+
+server:
+  port: 8000
+  tensor_parallel_size: 1
+  gpu_memory_utilization: 0.92
+  max_num_seqs: 256
+
+# 以下为优化版对比预留（Baseline 全部使用默认值）
+attention:
+  backend: "vllm_default"        # ← 默认 FlashAttention
+
+scheduler:
+  policy: "fcfs"                 # ← 默认 FCFS
+  max_num_batched_tokens: null   # ← 默认自动
+
+kv_cache:
+  block_size: 16                 # ← 默认 16 tokens/block
+  enable_prefix_caching: false   # ← 默认关闭
+
+precision:
+  quantization: null             # ← 无量化
