@@ -1,3 +1,3 @@
-from .profiling import Profiler, Timer
+from .profiling import RequestProfiler, Timer, DCUHardwareProfiler
 
-__all__ = ["Profiler", "Timer"]
+__all__ = ["RequestProfiler", "Timer", "DCUHardwareProfiler"]
