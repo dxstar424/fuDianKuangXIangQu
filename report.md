@@ -2,12 +2,19 @@
 
 ## 1. 技术路线概述
 
-本文档描述针对 Qwen3.5-27B 在 DCU 加速卡上的推理服务优化方案。
+以 **vLLM 0.18.1** 为基础框架，在 **Qwen3.5-27B (bf16)** 单卡 DCU 环境下，
+从 KV Cache 管理、算子优化、执行路径三个维度进行系统级推理优化。
+核心目标：**在满足 TTFT / TPOT SLA 硬性约束的前提下，最大化输出吞吐量**。
 
 ### 总体思路
 
-以 vLLM 0.18.1 为基础框架，从 KV Cache 管理、算子优化、执行路径三个维度
-进行系统性优化，在保证 SLA 门限和模型精度的前提下最大化吞吐量。
+```
+最终得分 = 吞吐量得分 × 精度系数
+    │
+    ├── KV Cache 优化 ──── 分级块分配 · 碎片整理 · KV FP8 量化 · Prefix 缓存
+    ├── Decode 算子优化 ── HIP FlashAttention · GQA 优化 · MFMA 加速 · LDS 利用
+    └── 执行路径优化 ──── HIP Graph 捕获 · 调度批量化 · 异步 SDMA 传输
+```
 
 ## 2. 优化措施与贡献分析
 
@@ -15,77 +22,66 @@
 
 **策略**：分级块分配 + 碎片整理 + Prefix 缓存 + KV FP8 量化
 
-- **分级块分配**：根据上下文长度选择不同块大小（16/64/256），减少短上下文
-  的内碎片和长上下文的块表开销
-- **碎片整理**：在空闲块占比超过阈值时主动整理，回收 HBM 连续空间
-- **Prefix 缓存**：检测共享前缀，复用 KV 块，减少重复 prefill
-- **KV FP8 量化**：在写入 KV Cache 时量化为 FP8（E4M3），读取时反量化，
-  节省约 40-50% KV Cache 显存
+- **分级块分配**：根据上下文长度选择不同块大小（16/64/256），减少短上下文的内碎片和长上下文的块表开销
+- **碎片整理**：空闲块占比超过 70% 时触发整理，回收 HBM 连续空间
+- **KV FP8 量化**：写入时量化为 FP8 (E4M3)，读取时反量化为 bf16。按 Qwen3.5-27B 参数估算，KV Cache 显存节省约 40-50%，可支撑更大 batch size
+- **Prefix 缓存**：检测共享前缀并复用 KV 块，避免重复 prefill
 
 ### 2.2 Decode 阶段算子优化
 
-**策略**：自研 DCU HIP Attention Kernel + 算子融合
+**策略**：手写 HIP FlashAttention kernel（基于 DTK/hipcc + CDNA 架构）
 
-- **HIP FlashAttention**：针对 DCU CDNA 架构调优 tile 大小（64×64），
-  利用 64-wide wavefront 和 LDS（Local Data Share）
-- **GQA 优化**：针对 Qwen 的 32 KV heads 减少 KV 重复扩展开销
-- **线性层融合**：QKV 投影融合为单次 GEMM
+- **LDS double buffering**：利用 64KB/CU 片上共享内存，分 tile 加载 Q/K/V，隐藏 HBM 延迟
+- **MFMA 加速**：QK^T 和 PV 计算使用 DCU Matrix Core 的 MFMA 指令（16×16×16），替代标量 dot product
+- **Online softmax**：避免写出中间注意力矩阵，降低显存占用
+- **128B HBM burst 对齐**：全局内存访问对齐到 HBM burst 边界
+- **GQA 优化**：Qwen 的 64 Q heads / 32 KV heads，直接利用 2 queries per KV head
 
 ### 2.3 执行路径优化
 
-**策略**：CUDA Graph 捕获 + 调度批量化 + 异步传输
-
-- **HIP Graph 捕获**：对 Decode 阶段固定 batch size 路径进行图捕获，消除
-  逐 step 的 kernel launch 开销
+- **HIP Graph 捕获**：对 Decode 阶段固定 batch 路径进行图捕获，消除逐 step kernel launch 开销
 - **调度批量化**：每 4-8 步调度一次，减少 Python 层开销
-- **异步 HBM ↔ Host 传输**：利用 DCU 异步 DMA 引擎重叠数据传输
+- **异步 SDMA 传输**：利用 DCU 异步 DMA 引擎重叠数据搬运
+- **预热**：服务初始化时运行 dummy 推理，填充 ROCm kernel 缓存
 
 ## 3. 优化点汇总表
 
-| 序号 | 优化项 | 类别 | 预期收益 |
-|------|--------|------|----------|
-| 1 | 分级块分配 | KV Cache | 减少内碎片 15%+ |
-| 2 | 碎片整理 | KV Cache | 回收 HBM 碎片 |
-| 3 | Prefix 缓存 | KV Cache | Prefill 加速 20%+ |
-| 4 | KV FP8 量化 | KV Cache | 节省 KV 显存 40%+ |
-| 5 | HIP FlashAttention | 算子 | TPOT 降低 15-25% |
-| 6 | GQA 优化 | 算子 | Attention 加速 10% |
-| 7 | 算子融合 | 算子 | Kernel launch 减少 |
-| 8 | HIP Graph 捕获 | 执行路径 | Decode 开销降低 30%+ |
-| 9 | 调度批量化 | 执行路径 | Python 开销降低 |
-| 10 | 异步传输 | 执行路径 | 隐藏数据传输延迟 |
+| 类别 | 优化项 | 方法 | 预期收益 | 状态 |
+|------|--------|------|----------|------|
+| KV Cache | 分级块分配 | 16/64/256 三级 | 减少内碎片 20-30% | ✅ 已实现 |
+| KV Cache | 碎片整理 | 空闲块 >70% 触发 | HBM 连续性提升 | ✅ 已实现 |
+| KV Cache | Prefix 缓存 | hash 匹配共享前缀 | 减少 prefill 30-50% | ✅ 已实现 |
+| KV Cache | FP8 在线量化 | E4M3 写入/读取 | KV 显存 -40-50% | ✅ 已实现 |
+| Decode | HIP FlashAttention | LDS+MFMA+online softmax | TPOT -20-30% | ⚠️ 待 DCU 验证 |
+| 调度 | 长度感知调度 | 短请求优先 + prefill/decode 分离 | TTFT P99 改善 | ✅ 已实现 |
+| 执行 | HIP Graph | 图捕获 + 回放 | kernel launch 开销 -30% | ✅ 已实现 |
+| 推理 | KV 量化 | FP8 在线量化 | 显存利用提升 | ✅ 已实现 |
 
-## 4. 实验记录
+## 4. 关键代码路径
 
-| 日期 | 版本 | TTFT P99 | TPOT P99 | 吞吐量 | SLA | 精度系数 |
-|------|------|----------|----------|--------|-----|----------|
-| - | baseline | - | - | - | - | 1.00 |
+- `src/plugin.py` — vLLM 集成入口，`apply()` 函数注入全部优化
+- `src/config.py` — config.yaml 加载器 + 参数校验
+- `src/attention/dcu_attention.py` — DCU attention 后端（HIP + PyTorch fallback）
+- `src/attention/hip_kernels/dcu_flash_attn.cpp` — HIP FlashAttention kernel
+- `src/kv_cache/block_allocator.py` — 分级块分配器
+- `src/kv_cache/cache_manager.py` — Watermark 预算 + Prefix 缓存
+- `src/scheduler/custom_scheduler.py` — 长度感知调度器
+- `src/quantization/kv_quant.py` — KV FP8 在线量化
+- `src/executor/exec_path.py` — HIP Graph 捕获 + 预热
+- `src/utils/profiling.py` — RequestProfiler + DCUHardwareProfiler
 
-## 5. Baseline 数据记录
+## 5. 性能数据
 
-> 📋 以下数据将在竞赛平台 DCU 实机上首次运行后填充。
+（待 DCU 平台 Baseline 评测完成后填入）
 
-| 档位 | TTFT P50 | TTFT P99 | TPOT P50 | TPOT P99 | 吞吐量 | SLA |
-|------|----------|----------|----------|----------|--------|-----|
-| short (20%) | - | - | - | - | - | - |
-| medium (50%) | - | - | - | - | - | - |
-| long (30%) | - | - | - | - | - | - |
-| **加权总分** | | | | | **-** | |
+| 档位 | Baseline TTFT P99 | Optimized TTFT P99 | Baseline TPOT | Optimized TPOT | Baseline 吞吐 | Optimized 吞吐 | SLA |
+|------|------------------|--------------------|---------------|----------------|--------------|----------------|-----|
+| 4-8K | - | - | - | - | - | - | - |
+| 8-16K | - | - | - | - | - | - | - |
+| 16-32K | - | - | - | - | - | - | - |
 
-### 评测方式
+## 6. 参考资源
 
-```bash
-# 一键 Baseline 评测
-bash scripts/run_baseline.sh
-
-# 手动分步
-bash baseline/launch.sh &
-python scripts/benchmark.py --host localhost --port 8000 --output results/
-
-# 优化版评测
-bash launch.sh &
-python scripts/benchmark.py --host localhost --port 8000 --output results/
-
-# 对比
-python scripts/compare.py results/baseline_xxx.json results/optimized_xxx.json
-```
+- 竞赛官网：https://pra.xtnl.org.cn/（HIP 编程指南、DTK 使用说明）
+- vLLM 0.18.1 源码（平台镜像）：http://developer.sourcefind.cn/codes/OpenDAS/vllm_cscc.git
+- ROCm 官方文档：https://rocm.docs.amd.com/

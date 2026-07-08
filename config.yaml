@@ -26,11 +26,11 @@ scheduler:
   max_num_batched_tokens: 8192    # 单 batch 最大 token 数
   prefill_batch_size: 4           # Prefill 阶段单 batch 请求数
 
-# --- 执行路径 ---
+# --- 执行路径（DCU/HIP） ---
 executor:
   reduce_python_overhead: true    # 减少 Python 层调度开销
-  use_cuda_graph: true            # CUDA Graph 捕获（DCU 等效）
-  cuda_graph_max_bs: 16           # CUDA Graph 最大 batch size
+  use_hip_graph: true             # HIP Graph 捕获
+  hip_graph_max_bs: 16            # HIP Graph 最大 batch size
   enable_prefix_caching: true     # Prefix Caching
   num_scheduler_steps: 8          # 调度步数（减少 kernel launch）
 

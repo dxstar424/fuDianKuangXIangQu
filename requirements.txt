@@ -1,11 +1,9 @@
 # FDU SCCSCC26 - 额外 Python 依赖
-# 基础包（PyTorch / vLLM / transformers）由官方镜像提供，此处仅列额外依赖
+# 基础包（PyTorch / vLLM / transformers / ROCm SMI）由官方镜像提供
+# 此处仅列编译和实验中需要的额外依赖
 
-# 性能分析
-nvidia-ml-py>=12.0.0        # DCU 等效：ROCm SMI 已预装
-
-# 数值计算
+# 数值计算（评测、量化）
 numpy>=1.26.0
 
-# 实验管理
+# 实验管理与配置解析
 pyyaml>=6.0

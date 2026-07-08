@@ -1,53 +1,28 @@
 """
 DCU-Optimized Attention Backend for vLLM (ROCm/HIP).
 
-这个模块实现了两套路径：
-  A. HIP JIT Kernel 路径（DCU 实机）
-     - 运行时通过 torch.utils.cpp_extension.load_inline 编译 HIP C++ kernel
-     - Kernel 源码位于 hip_kernels/dcu_flash_attn.cpp
-     - 使用 HIP 原生 API: __shared__ (LDS), hipMalloc, __syncthreads 等
-  B. PyTorch Fallback 路径（本地开发 / 非 ROCm 环境）
-     - 使用 F.scaled_dot_product_attention
-     - 支持 GQA（Grouped Query Attention）
+两套执行路径：
+  A. HIP Kernel（DCU 实机）— hipcc 预编译 .so → ctypes host wrapper
+  B. PyTorch Fallback（本地）— F.scaled_dot_product_attention + GQA
 
-DCU CDNA 架构针对优化：
-  - Wavefront = 64 线程（vs NVIDIA Warp = 32）
-  - LDS (Local Data Share) = 64 KB / CU（片上共享内存）
-  - Matrix Core 使用 MFMA 指令（非 Tensor Core WMMA）
-  - Tile 大小: 128×64 (Q) × 64 (KV) 以匹配 64-wide wavefront
-
-启用方式：
-  export VLLM_ATTENTION_BACKEND=dcu_optimized
-  或在 vLLM config 中设置 attention_backend="dcu_optimized"
+编译: bash scripts/compile_kernels.sh
+启用: export VLLM_ATTENTION_BACKEND=dcu_optimized
 """
 
+import ctypes
 import os
 import torch
 import torch.nn.functional as F
 from pathlib import Path
-from typing import Optional, Tuple
+from typing import Optional
 
 
 class DCUAttentionBackend:
-    """
-    DCU 优化的 Attention 后端。
+    """DCU 优化的 Attention 后端。通过 ctypes 调用预编译的 HIP host wrapper。"""
 
-    两套执行路径：
-    - HIP JIT kernel：在 DCU 实机上 JIT 编译并执行，充分利用 LDS 和 MFMA
-    - PyTorch fallback：本地开发环境通用实现
-    """
-
-    # DCU CDNA2/CDNA3 架构参数
-    WAVEFRONT_SIZE = 64       # DCU wavefront = 64 线程
-    LDS_SIZE_PER_CU = 65536   # 64 KB LDS per CU（CDNA2）
-    MFMA_M = 16               # MFMA 指令矩阵宽
-    MFMA_N = 16               # MFMA 指令矩阵高
-    MFMA_K = 16               # MFMA 指令内积维度
-
-    # 经 DCU 架构分析的推荐 tile 大小
-    TILE_Q = 128              # Query tile 行数（匹配双 wavefront slot）
-    TILE_KV = 64              # KV tile 行数（匹配单 wavefront）
-    TILE_D = 32               # Head dim tile（匹配 32×32 MFMA 累加）
+    WAVEFRONT_SIZE = 64
+    TILE_Q = 128
+    TILE_KV = 64
 
     def __init__(
         self,
@@ -56,174 +31,118 @@ class DCUAttentionBackend:
         head_dim: int,
         scale: Optional[float] = None,
         use_fp8: bool = False,
-        kernel_dir: Optional[str] = None,
     ):
-        """
-        Args:
-            num_heads: Q 的 head 数（Qwen3.5-27B = 64）
-            num_kv_heads: KV 的 head 数（Qwen3.5-27B GQA = 32）
-            head_dim: 每个 head 的维度（通常 128）
-            scale: softmax scale，默认 1/√head_dim
-            use_fp8: 是否在 Attention 计算中使用 FP8
-            kernel_dir: HIP kernel 源码目录
-        """
         self.num_heads = num_heads
         self.num_kv_heads = num_kv_heads
         self.head_dim = head_dim
         self.scale = scale or (head_dim ** -0.5)
         self.use_fp8 = use_fp8
         self.num_queries_per_kv = num_heads // num_kv_heads
-
-        # HIP kernel 路径
-        if kernel_dir is None:
-            kernel_dir = Path(__file__).parent / "hip_kernels"
-        self.kernel_dir = Path(kernel_dir)
-        self._kernel_module = None  # JIT 编译后的 HIP kernel module
-
-    # ---- ROCm 环境检测 ----
+        self._kernel_lib: Optional[ctypes.CDLL] = None
 
     @staticmethod
     def is_rocm() -> bool:
-        """检测是否在 ROCm/DCU 环境下运行"""
         if not torch.cuda.is_available():
             return False
-        return hasattr(torch.version, 'hip') and torch.version.hip is not None
-
-    @staticmethod
-    def get_rocm_version() -> Optional[str]:
-        """获取 ROCm 版本号"""
-        if hasattr(torch.version, 'hip'):
-            return torch.version.hip
-        return None
+        return hasattr(torch.version, "hip") and torch.version.hip is not None
 
     @property
-    def using_hip_kernel(self) -> bool:
-        """是否已加载 HIP kernel"""
-        return self._kernel_module is not None
+    def kernel_loaded(self) -> bool:
+        return self._kernel_lib is not None
 
-    # ---- HIP Kernel JIT 编译 ----
-
-    def load_hip_kernel(self, verbose: bool = True) -> bool:
-        """
-        JIT 编译并加载 DCU FlashAttention HIP kernel。
-
-        流程：
-          1. 读取 hip_kernels/dcu_flash_attn.cpp 源码
-          2. 通过 torch.utils.cpp_extension.load_inline 编译
-          3. 编译使用 hipcc（需在 PATH 中）或通过 DTK 的编译器
-          4. 编译成功后缓存 .so 文件到 ~/.cache/torch_extensions/
-
-        竞赛环境预装了 DTK（含 hipcc），编译应在服务初始化时完成。
-
-        Returns:
-            True 如果加载成功
-        """
+    def load_kernel(self, verbose: bool = True) -> bool:
+        """加载预编译 HIP kernel .so，绑定 host wrapper 函数签名。"""
         if not self.is_rocm():
             if verbose:
-                print("[DCUAttention] Not a ROCm environment, skipping HIP kernel load.")
+                print("[DCUAttn] Not ROCm — skip kernel load.")
             return False
 
-        kernel_file = self.kernel_dir / "dcu_flash_attn.cpp"
-        if not kernel_file.exists():
+        search_paths = [
+            Path(__file__).parent.parent.parent / "build" / "kernels" / "dcu_flash_attn.so",
+            Path(__file__).parent / "hip_kernels" / "dcu_flash_attn.so",
+        ]
+        so_path = None
+        for p in search_paths:
+            if p.exists():
+                so_path = str(p.resolve())
+                break
+
+        if so_path is None:
             if verbose:
-                print(f"[DCUAttention] HIP kernel source not found: {kernel_file}")
+                print("[DCUAttn] Kernel .so not found. Run: bash scripts/compile_kernels.sh")
             return False
 
         try:
-            from torch.utils.cpp_extension import load_inline
-
-            kernel_source = kernel_file.read_text()
-
-            self._kernel_module = load_inline(
-                name="dcu_flash_attn",
-                cpp_sources=[kernel_source],
-                functions=["dcu_flash_attn_forward"],
-                extra_cflags=["-O3", "-D__HIP_PLATFORM_AMD__"],
-                extra_cuda_cflags=[],   # ROCm 下等效为 hipcc flags
-                verbose=verbose,
-            )
-
+            lib = ctypes.CDLL(so_path)
+            # 绑定 host wrapper: 返回 int，接受 10 个参数 + stream
+            lib.dcu_flash_attn_forward.argtypes = [
+                ctypes.c_void_p,  # Q
+                ctypes.c_void_p,  # K
+                ctypes.c_void_p,  # V
+                ctypes.c_void_p,  # O
+                ctypes.c_float,   # scale
+                ctypes.c_int,     # seq_len
+                ctypes.c_int,     # num_heads
+                ctypes.c_int,     # num_kv_heads
+                ctypes.c_int,     # head_dim
+                ctypes.c_void_p,  # hipStream_t
+            ]
+            lib.dcu_flash_attn_forward.restype = ctypes.c_int
+            self._kernel_lib = lib
             if verbose:
-                print(f"[DCUAttention] HIP kernel loaded: {kernel_file}")
+                print(f"[DCUAttn] Kernel loaded: {so_path}")
             return True
-
-        except Exception as e:
+        except OSError as e:
             if verbose:
-                print(f"[DCUAttention] HIP kernel compile failed: {e}")
-                print("[DCUAttention] Falling back to PyTorch implementation.")
+                print(f"[DCUAttn] Failed to load {so_path}: {e}")
             return False
-
-    # ---- Attention Forward ----
 
     def forward(
         self,
-        query: torch.Tensor,        # [num_tokens, num_heads, head_dim]
-        key: torch.Tensor,          # [num_tokens, num_kv_heads, head_dim]
-        value: torch.Tensor,        # [num_tokens, num_kv_heads, head_dim]
-        block_tables: Optional[torch.Tensor] = None,  # PagedAttention block tables
-        context_lens: Optional[torch.Tensor] = None,  # 每序列的上下文长度
-        max_context_len: int = 0,
-        alibi_slopes: Optional[torch.Tensor] = None,
-    ) -> torch.Tensor:
-        """
-        Attention 前向计算。优先使用 HIP kernel，否则 fallback PyTorch。
-        """
-        if self.using_hip_kernel:
-            return self._forward_hip(
-                query, key, value, block_tables, context_lens, max_context_len
-            )
-        else:
-            return self._forward_torch(query, key, value)
-
-    def _forward_hip(
-        self,
         query: torch.Tensor,
         key: torch.Tensor,
         value: torch.Tensor,
-        block_tables: Optional[torch.Tensor],
-        context_lens: Optional[torch.Tensor],
-        max_context_len: int,
+        block_tables=None,
+        context_lens=None,
+        max_context_len: int = 0,
+        alibi_slopes=None,
     ) -> torch.Tensor:
-        """
-        HIP FlashAttention kernel 路径。
+        if self.kernel_loaded:
+            return self._forward_hip(query, key, value)
+        return self._forward_torch(query, key, value)
 
-        Kernel 内部结构：
-          1. 全局内存 → LDS：分 tile 加载 Q, K, V
-          2. LDS 上完成 QK^T（使用 MFMA 指令加速）
-          3. LDS 上完成 online softmax（避免写出中间结果）
-          4. LDS → 寄存器：加载 softmax 结果
-          5. 寄存器 → 全局内存：写出 Attention 输出
+    def _forward_hip(self, query, key, value) -> torch.Tensor:
+        """通过 ctypes host wrapper 调用 HIP kernel。"""
+        num_tokens = query.shape[0]
+        output = torch.empty_like(query)
 
-        每个 CU 可同时处理多个 tile，通过 wavefront 切换隐藏 HBM 延迟。
-        """
-        # TODO: 调用实际 HIP kernel
-        # output = self._kernel_module.dcu_flash_attn_forward(
-        #     query, key, value, self.scale, block_tables, context_lens
-        # )
-        raise NotImplementedError(
-            "HIP kernel not yet implemented. "
-            "Call load_hip_kernel() first, or use PyTorch fallback."
+        # 获取当前 CUDA/HIP stream
+        stream = torch.cuda.current_stream().cuda_stream
+
+        ret = self._kernel_lib.dcu_flash_attn_forward(
+            query.data_ptr(),
+            key.data_ptr(),
+            value.data_ptr(),
+            output.data_ptr(),
+            ctypes.c_float(self.scale),
+            ctypes.c_int(num_tokens),
+            ctypes.c_int(self.num_heads),
+            ctypes.c_int(self.num_kv_heads),
+            ctypes.c_int(self.head_dim),
+            ctypes.c_void_p(stream),
         )
 
-    def _forward_torch(
-        self,
-        query: torch.Tensor,
-        key: torch.Tensor,
-        value: torch.Tensor,
-    ) -> torch.Tensor:
-        """
-        PyTorch fallback（本地开发 + GQA 支持）。
-        使用 F.scaled_dot_product_attention。
-        """
-        num_tokens, num_heads, head_dim = query.shape
-        num_kv_heads = key.shape[1]
+        if ret != 0:
+            raise RuntimeError(f"[DCUAttn] HIP kernel returned error code {ret}")
 
-        # GQA: 将 KV heads 扩展到 Q heads 数量
-        if num_heads != num_kv_heads:
+        torch.cuda.synchronize()
+        return output
+
+    def _forward_torch(self, query, key, value) -> torch.Tensor:
+        """PyTorch fallback with GQA support."""
+        if query.shape[1] != key.shape[1]:
             key = key.repeat_interleave(self.num_queries_per_kv, dim=1)
             value = value.repeat_interleave(self.num_queries_per_kv, dim=1)
-
-        # [tokens, heads, dim] → [heads, tokens, dim]
         return F.scaled_dot_product_attention(
             query.transpose(0, 1),
             key.transpose(0, 1),

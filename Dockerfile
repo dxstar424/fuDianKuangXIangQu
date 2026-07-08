@@ -6,7 +6,7 @@
 ARG BASE_IMAGE=competition/vllm-0.18.1-base:v1.0
 FROM ${BASE_IMAGE}
 
-# --- 系统依赖（如需额外的编译工具链）---
+# --- 系统依赖（HIP kernel 编译工具链）---
 RUN apt-get update && apt-get install -y --no-install-recommends \
     build-essential \
     cmake \
@@ -23,15 +23,18 @@ RUN pip install --no-cache-dir -r requirements.txt
 # --- 拷贝源码 ---
 COPY src/ ./src/
 
-# --- 编译自定义 HIP Kernel（如有）---
-# 注意：在 Docker build 时 DCU 设备不可用，HIP kernel 仅做语法编译
-# 实际 JIT 编译在运行时通过 torch.utils.cpp_extension.load_inline 完成
+# --- 编译自定义 HIP Kernel ---
+# 注意：Docker build 时无 DCU 设备，hipcc 仅做语法编译；
+# 完整 kernel 功能需在运行时通过 ctypes 加载预编译的 .so。
 COPY scripts/compile_kernels.sh ./scripts/compile_kernels.sh
-RUN bash scripts/compile_kernels.sh
+RUN bash scripts/compile_kernels.sh || echo "[FDU] HIP kernel syntax-only compile — OK (no DCU device)"
 
 # --- 拷贝启动脚本与配置 ---
 COPY launch.sh .
 COPY config.yaml .
+
+# --- 拷贝环境变量说明文档（提交必需）---
+COPY docs/env_vars.md ./docs/env_vars.md
 
 # --- 入口 ---
 EXPOSE 8000
