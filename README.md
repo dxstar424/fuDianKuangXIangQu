@@ -151,7 +151,7 @@ python scripts/benchmark.py --tier short
 
 ## 团队成员
 
-- 复旦大学 — 待补充
+- 复旦大学 — dx
 
 ## 提交清单
 
