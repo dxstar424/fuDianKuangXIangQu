@@ -1,40 +1,25 @@
 # ============================================================
 # FDU SCCSCC26 - 可调参数声明
-# 所有赛题允许的可调参数集中管理，便于复现与评审
+# 策略: config 级参数通过 launch.sh 传入 vLLM
+#       source 级参数通过 env var 控制 vLLM 源码 patch
 # ============================================================
 
-# --- KV Cache 管理 ---
-kv_cache:
-  strategy: "defrag"              # 可选: defrag | prealloc | dynamic
-  block_size: 16                  # PagedAttention 块大小 (token 数)
-  gpu_memory_utilization: 0.92    # GPU 显存利用率上限
-  enable_kv_quant: true           # KV Cache 在线量化
+# --- vLLM 原生参数（由 launch.sh 传入）---
+server:
+  max_num_seqs: 256               # 最大并发序列数（baseline: 128）
+  max_num_batched_tokens: 8192    # 单 batch 最大 token 数（baseline: 4096）
+  gpu_memory_utilization: 0.95    # GPU 显存利用率（baseline: 0.92）
+  enable_prefix_caching: true     # 共享前缀 KV 复用
+  compilation_cudagraph_mode: 2   # HIP Graph 全量图捕获
+
+# --- FDU 源码 patch 参数（通过环境变量控制）---
+optimization:
+  enable_kv_quant: true           # KV Cache FP8 在线量化
   kv_quant_dtype: "fp8"           # 量化类型: fp8 | int8
-  defrag_threshold: 0.7           # 碎片整理触发阈值（空闲块占比）
+  enable_hip_graph: true          # HIP Graph 捕获
+  scheduler_policy: "length_aware" # 调度策略: length_aware | fcfs
+  enable_hip_flash_attn: false    # HIP FlashAttention kernel（待验证后开启）
 
-# --- Attention 后端 ---
-attention:
-  backend: "dcu_optimized"        # 可选: dcu_optimized | flash_attn | flashinfer
-  use_paged_attention: true
-  num_kv_heads_override: null     # GQA 时覆盖 KV head 数
-  sliding_window: null            # 滑动窗口 Attention（null=禁用）
-
-# --- 调度器 ---
-scheduler:
-  policy: "length_aware"          # 可选: length_aware | fcfs | priority
-  max_num_seqs: 256               # 最大并发序列数
-  max_num_batched_tokens: 8192    # 单 batch 最大 token 数
-  prefill_batch_size: 4           # Prefill 阶段单 batch 请求数
-
-# --- 执行路径（DCU/HIP） ---
-executor:
-  reduce_python_overhead: true    # 减少 Python 层调度开销
-  use_hip_graph: true             # HIP Graph 捕获
-  hip_graph_max_bs: 16            # HIP Graph 最大 batch size
-  enable_prefix_caching: true     # Prefix Caching
-  num_scheduler_steps: 8          # 调度步数（减少 kernel launch）
-
-# --- 精度 ---
+# --- 精度控制 ---
 precision:
-  enforce_accuracy_check: true    # 强制精度自检
   accuracy_tolerance: 0.01        # 容忍精度下降上限
