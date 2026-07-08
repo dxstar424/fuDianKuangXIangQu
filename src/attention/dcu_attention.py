@@ -184,26 +184,14 @@ class DCUAttentionBackend:
         context_lens: Optional[torch.Tensor],
         max_context_len: int,
     ) -> torch.Tensor:
-        """
-        HIP FlashAttention kernel 路径。
-
-        Kernel 内部结构：
-          1. 全局内存 → LDS：分 tile 加载 Q, K, V
-          2. LDS 上完成 QK^T（使用 MFMA 指令加速）
-          3. LDS 上完成 online softmax（避免写出中间结果）
-          4. LDS → 寄存器：加载 softmax 结果
-          5. 寄存器 → 全局内存：写出 Attention 输出
-
-        每个 CU 可同时处理多个 tile，通过 wavefront 切换隐藏 HBM 延迟。
-        """
-        # TODO: 调用实际 HIP kernel
-        # output = self._kernel_module.dcu_flash_attn_forward(
-        #     query, key, value, self.scale, block_tables, context_lens
-        # )
-        raise NotImplementedError(
-            "HIP kernel not yet implemented. "
-            "Call load_hip_kernel() first, or use PyTorch fallback."
-        )
+        """HIP path — falls back to GQA PyTorch until kernel is validated on DCU."""
+        if self._kernel_module is None:
+            return self._forward_torch(query, key, value)
+        try:
+            # Kernel API will be wired after SCNet validation
+            return self._forward_torch(query, key, value)
+        except Exception:
+            return self._forward_torch(query, key, value)
 
     def _forward_torch(
         self,

@@ -1,40 +1,34 @@
 # ============================================================
-# FDU SCCSCC26 - 可调参数声明
-# 所有赛题允许的可调参数集中管理，便于复现与评审
+# FDU SCCSCC26 - 可调参数声明（合规）
+# 禁止修改: max-num-seqs, max-num-batched-tokens, batch scheduler
 # ============================================================
 
 # --- KV Cache 管理 ---
 kv_cache:
-  strategy: "defrag"              # 可选: defrag | prealloc | dynamic
-  block_size: 16                  # PagedAttention 块大小 (token 数)
-  gpu_memory_utilization: 0.92    # GPU 显存利用率上限
-  enable_kv_quant: true           # KV Cache 在线量化
-  kv_quant_dtype: "fp8"           # 量化类型: fp8 | int8
-  defrag_threshold: 0.7           # 碎片整理触发阈值（空闲块占比）
+  strategy: "defrag"
+  block_size: 16
+  gpu_memory_utilization: 0.94   # 提分：长档 KV 更充裕（launch 可覆盖）
+  enable_kv_quant: false           # 默认关，保精度系数
+  kv_quant_dtype: "fp8"
+  defrag_threshold: 0.7
 
 # --- Attention 后端 ---
 attention:
-  backend: "dcu_optimized"        # 可选: dcu_optimized | flash_attn | flashinfer
+  backend: "dcu_optimized"        # dcu_optimized | flash_attn
   use_paged_attention: true
-  num_kv_heads_override: null     # GQA 时覆盖 KV head 数
-  sliding_window: null            # 滑动窗口 Attention（null=禁用）
+  num_kv_heads: 32                # Qwen3.5-27B GQA
+  num_q_heads: 64
 
-# --- 调度器 ---
-scheduler:
-  policy: "length_aware"          # 可选: length_aware | fcfs | priority
-  max_num_seqs: 256               # 最大并发序列数
-  max_num_batched_tokens: 8192    # 单 batch 最大 token 数
-  prefill_batch_size: 4           # Prefill 阶段单 batch 请求数
-
-# --- 执行路径 ---
+# --- 执行路径（不触碰 batch scheduler）---
 executor:
-  reduce_python_overhead: true    # 减少 Python 层调度开销
-  use_cuda_graph: true            # CUDA Graph 捕获（DCU 等效）
-  cuda_graph_max_bs: 16           # CUDA Graph 最大 batch size
-  enable_prefix_caching: true     # Prefix Caching
-  num_scheduler_steps: 8          # 调度步数（减少 kernel launch）
+  enable_prefix_caching: true
+  use_cuda_graph: false           # 默认关；SCNet 稳定性验证后设 FDU_ENABLE_HIP_GRAPH=1
+  cuda_graph_max_bs: 1            # 并发=1
 
-# --- 精度 ---
+# --- 精度门禁 ---
 precision:
-  enforce_accuracy_check: true    # 强制精度自检
-  accuracy_tolerance: 0.01        # 容忍精度下降上限
+  enforce_accuracy_check: true
+  accuracy_tolerance: 0.01        # Δ ≤ 1%
+
+# --- 已弃用（赛题禁止改 batch scheduler，并发=1 无收益）---
+# scheduler: 见 src/scheduler/custom_scheduler.py（仅参考，不启用）

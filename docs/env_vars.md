@@ -1,20 +1,41 @@
-# 环境变量说明
+# 环境变量说明（评测提交必填）
 
-## 自定义变量
+## FDU 优化开关
 
-| 变量名 | 取值 | 作用 | 配置原因 |
+| 变量名 | 默认 | 作用 | 配置原因 |
 |--------|------|------|----------|
-| `FDU_KV_CACHE_STRATEGY` | `defrag` / `prealloc` / `dynamic` | KV Cache 管理策略 | 按场景切换分配策略 |
-| `FDU_ATTENTION_BACKEND` | `dcu_optimized` | Attention 后端选择 | 启用自研 DCU kernel |
-| `FDU_ENABLE_KV_QUANT` | `0` / `1` | KV Cache 在线量化开关 | 控制显存用量 |
-| `FDU_SCHEDULER_POLICY` | `length_aware` / `fcfs` | 调度策略 | 按负载特征选择 |
+| `FDU_ENABLE` | `1` | 总开关 | 关闭则等同 stock vLLM |
+| `FDU_KV_CACHE_STRATEGY` | `defrag` | KV 块分配策略 | defrag/prealloc/dynamic |
+| `FDU_ATTENTION_BACKEND` | `dcu_optimized` | Attention 路径 | HIP kernel + GQA fallback |
+| `FDU_ENABLE_KV_QUANT` | `0` | KV 在线 FP8（**默认关**，保精度） |
+| `FDU_ENABLE_PREFIX_CACHE` | `1` | Prefix 缓存 | 降 TTFT（长上下文） |
+| `FDU_ENABLE_GQA_OPT` | `1` | GQA einsum 路径 | 降 TPOT memory bound |
+| `FDU_ENABLE_HIP_GRAPH` | `0` | HIP Graph decode | 默认关，SCNet 长测通过后启用 |
 
-## ROCm/DCU 相关（竞赛环境预装）
+## 启动参数（launch.sh）
 
-| 变量名 | 说明 |
-|--------|------|
-| `ROCM_PATH` | ROCm 安装路径（默认 `/opt/rocm`） |
-| `HIP_PLATFORM` | HIP 平台标识（`amd`） |
-| `HIP_VISIBLE_DEVICES` | 可见 DCU 设备 ID（`0`） |
-| `GPU_MAX_HW_QUEUES` | 硬件队列数上限 |
-| `HSA_ENABLE_SDMA` | 启用 SDMA 异步传输引擎 |
+| 变量名 | 默认 | 说明 |
+|--------|------|------|
+| `MODEL_PATH` | `/data/Qwen3.5-27B` | 模型路径 |
+| `PORT` | `8000` | 服务端口 |
+| `GPU_MEMORY_UTILIZATION` | `0.94` | 显存利用率（提分关键） |
+| `DO_WARMUP` | `1` | 启动后分档 warmup |
+| `WARMUP_ROUNDS` | `1` | warmup 轮数 |
+| `WARMUP_TIER` | `all` | `all` / `4-8K` / `8-16K` / `16-32K` |
+| `ENABLE_PREFIX_CACHING` | `1` | vLLM prefix caching CLI |
+
+## ROCm/DCU（scripts/rocm_env.sh）
+
+| 变量名 | 默认 | 说明 |
+|--------|------|------|
+| `HIP_PLATFORM` | `amd` | HIP 平台 |
+| `HIP_VISIBLE_DEVICES` | `0` | 可见 DCU |
+| `GPU_MAX_HW_QUEUES` | `2` | 硬件队列 |
+| `HSA_ENABLE_SDMA` | `1` | 异步 SDMA |
+| `PYTORCH_HIP_ALLOC_CONF` | `expandable_segments:True` | 显存分配 |
+| `HIPCC_COMPILE_FLAGS_APPEND` | `-O3` | vLLM 编译优化（compile_vllm.sh） |
+| `GPU_ARCH` | 自动 | hipcc `--offload-arch` |
+
+## 已移除（违规/无效）
+
+- `FDU_SCHEDULER_POLICY` — 赛题禁止修改 batch scheduler；并发=1 无收益

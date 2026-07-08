@@ -64,43 +64,37 @@ Pra2026/
 
 ## 快速开始
 
-### 前置条件
-
-- 竞赛指定 DCU 加速卡（单卡）
-- Python 3.10.12
-- vLLM 0.18.1
-- PyTorch 2.10.0 (ROCm)
-- DTK（含 hipcc）
-
-### Baseline 评测（上平台第一步）
+### SCNet 调试（选手 PDF 流程）
 
 ```bash
-# 一键运行
-bash scripts/run_baseline.sh
-
-# 或分步
-bash baseline/launch.sh &
-python scripts/benchmark.py --host localhost --port 8000 --output results/
+bash scripts/scnet_setup.sh          # Phase 0: vLLM 编译 + 模型 + testdata
+bash scripts/record_baseline.sh      # 记录三档 baseline
+bash scripts/gate_check.sh quick     # 精度/性能门禁
+bash scripts/compile_vllm.sh         # 重编译 vLLM + FDU 补丁
+bash launch.sh                       # 优化版服务（含 warmup）
 ```
 
-### 优化版评测
+### 本地 / 评测机
 
 ```bash
-bash launch.sh &
+bash baseline/launch.sh &            # stock baseline
+bash launch.sh                       # fdu_vllm 优化版（python -m fdu_vllm.server）
 python scripts/benchmark.py --host localhost --port 8000 --output results/
-```
-
-### 对比报告
-
-```bash
 python scripts/compare.py results/baseline_xxx.json results/optimized_xxx.json
 ```
 
-### 单档快速迭代
+### 项目结构（v0.2.0）
 
-```bash
-# 只跑短上下文（100 请求，8 并发）
-python scripts/benchmark.py --tier short
+```
+├── src/fdu_vllm/          # vLLM 插件入口（activate + server）
+├── patches/vllm_cscc/     # vllm_cscc 补丁
+├── scripts/
+│   ├── scnet_setup.sh     # SCNet 一键初始化
+│   ├── compile_vllm.sh    # 编译官方 vllm_cscc + 补丁
+│   ├── gate_check.sh      # 每阶段门禁
+│   └── verify_token_consistency.py
+├── launch.sh              # 评测启动（合规，无 scheduler env）
+└── docs/submit_checklist.md
 ```
 
 ## 评测体系

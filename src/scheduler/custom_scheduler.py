@@ -1,11 +1,14 @@
 """
 Custom Scheduler for vLLM with length-aware batching.
 
-Optimization strategies:
-1. Length-aware batching: group requests by context length to minimize padding
-2. Prefill-decode decoupling: separate queues for prefill and decode phases
-3. Priority inversion prevention: ensure short requests don't starve behind long ones
-4. DCU occupancy optimization: target optimal wavefront occupancy per kernel launch
+DEPRECATED — 赛题禁止修改 vLLM batch scheduler；初赛并发=1，此模块不启用。
+保留仅供架构参考，launch.sh / fdu_vllm 不会加载本模块。
+
+原设计目标（未启用）：
+1. Length-aware batching
+2. Prefill-decode decoupling
+3. Priority inversion prevention
+4. DCU occupancy optimization
 """
 
 from collections import deque
