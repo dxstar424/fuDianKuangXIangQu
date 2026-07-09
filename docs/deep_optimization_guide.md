@@ -72,7 +72,23 @@
 
 ## 三、Phase 1：低风险高回报优化（必须做，保分项）
 
-> 目标：在**不碰红线、精度系数≈1.0** 前提下，稳住 SLA，主攻档拿到「保底分 + 小幅提升」。对应仓库 v0.2.1+ `launch.sh` 默认策略。
+> 目标：在**不碰红线、精度系数≈1.0** 前提下，稳住 SLA，主攻档拿到「保底分 + 小幅提升」。对应仓库 `launch.sh` 默认策略。  
+> **一页清单**：[easy_scoring.md](./easy_scoring.md)（最有把握提分 · 必做）。
+
+### ★ 最有把握提分步骤（先做完再碰 Phase 2）
+
+| 顺序 | 步骤 | 默认 | 代码 | 把握理由 |
+|------|------|------|------|----------|
+| ① | 显存 `0.92→0.94` | 开 | `launch.sh` `--gpu-memory-utilization` | 长档 KV 线性涨；不改语义 |
+| ② | 分档 warmup（**8–16K 优先**） | 开 | `warmup_server.py` | 稳 TTFT P99，防首条熔断 |
+| ③ | Prefix caching | 开 | `--enable-prefix-caching` | 成本极低；共享前缀降 TTFT |
+| ④ | 关 log-requests/stats | 开 | `launch.sh` + `vllm_env.py` | 减 Python I/O，无精度风险 |
+| ⑤ | ROCm env（SDMA 等） | 开 | `rocm_env.sh` + `vllm_env.py` | 带宽/分配稳定，可单变量回退 |
+| ⑥ | KV FP8 **关** | 强制 | `FDU_ENABLE_KV_QUANT=0` | 保 k=1.0；量化留 Phase 3 |
+| ⑦ | bf16 + 合规 served-name | 开 | `launch.sh` | 与官方权重一致 |
+
+**执行口令**：`FDU_PHASE=1 bash launch.sh`（评测机 CMD 已默认）。  
+**不要同时开**：GQA / defrag / HIP Graph / KV FP8（`FDU_PHASE=1` 已屏蔽钩子）。
 
 ### 1.1 提高 GPU 显存利用率（KV 池更大）
 

@@ -1,76 +1,86 @@
-# 最容易拿分的改进（已合入 launch.sh）
+# 最有把握提分清单（Phase 1 · 必做）
 
-> 深度指南（必须 vs 冲刺）：[deep_optimization_guide.md](./deep_optimization_guide.md)  
-> 总规划：[optimization_roadmap.md](./optimization_roadmap.md)  
-> 官方解读：[official_guidance_interpretation.md](./official_guidance_interpretation.md)  
-> **DCU 实测**：[dcu_decode_benchmark_interpretation.md](./dcu_decode_benchmark_interpretation.md)
+> **深度指南**：[deep_optimization_guide.md](./deep_optimization_guide.md) §三  
+> **总规划**：[optimization_roadmap.md](./optimization_roadmap.md)  
+> **调参**：[parameter_tuning.md](./parameter_tuning.md)  
+> **分支**：`lutinayi_branch` · 入口：`launch.sh`
 
-按官方 **2026-07-09 指导** + 跑分权重，优化分两阶段打：
+本文只列 **一定有把握、低风险、已合入默认提交路径** 的步骤。  
+不做 HIP kernel / KV FP8 / GQA deep hook（那些是 Phase 2+，需门禁后再开）。
 
-- **Prefill → TTFT**：warmup、prefix cache、显存预算
-- **Decode → TPOT/吞吐**：GQA、KV 块策略、Graph capture、KV FP8（须融合）
+---
 
-## P0 — 显存与 TTFT（立即）
+## 相对 stock 改了什么
 
-| 改动 | 作用 | 对应官方方向 |
-|------|------|--------------|
-| `GPU_MEMORY_UTILIZATION=0.94` | 长档 KV 更充裕，提吞吐 | 显存精细化管理 |
-| 分档 warmup | 稳 TTFT P99，防 SLA 熔断 | Prefill / 首字体验 |
-| `FDU_ENABLE_KV_QUANT=0` 默认 | 精度系数 1.0 | KV 量化双刃剑，先不开 |
+| # | 优化项 | stock baseline | 我们的默认 | 主攻指标 | 把握 |
+|---|--------|----------------|------------|----------|------|
+| 1.1 | 显存利用率 | `0.92` | **`0.94`** | 8–16K / 16–32K 吞吐 | ★★★★★ |
+| 1.2 | 分档 warmup | 无 | **开**（先 8–16K） | 全档 TTFT P99 | ★★★★★ |
+| 1.3 | Prefix caching | 关 | **开** | TTFT | ★★★★☆ |
+| 1.4 | 关请求/统计日志 | 开日志 | **关** | 微降 TPOT | ★★★★☆ |
+| 1.5 | ROCm/DCU env | 默认 | **SDMA + expandable_segments 等** | Decode 稳定性 | ★★★★☆ |
+| 1.6 | KV 在线量化 | — | **强制关** | 精度系数 = 1.0 | ★★★★★（保分） |
+| 1.7 | dtype / 接口 | bf16 隐式 | **显式 bf16 + 合规 served-name** | 稳定性 | ★★★★★ |
 
-## P1 — KV 与 Decode 访存（baseline 后）
+**禁止动**：`max-num-seqs` / `max-num-batched-tokens` / batch scheduler（与 stock 同为 256）。
 
-| 改动 | 作用 | 对应官方方向 |
-|------|------|--------------|
-| KV defrag / tiered blocks | 降碎片、稳长档 | **PagedAttention 块分配（官方最强调）** |
-| GQA einsum decode | 减 KV 读放大，降 TPOT | Decode 访存瓶颈 |
-| 长档 TPOT profiling | 定位 KV 读取路径 | 不能只看吞吐 |
-| `--enable-prefix-caching` | 降重复 prefill 的 TTFT | KV 命中率 |
-| `--disable-log-requests/stats` | 减 Python 开销 | 执行路径 |
-| `vllm_env.py` ROCm 变量 | 带宽/launch 微优化 | DCU 适配 |
+---
 
-## P2 — 调度与 KV 量化（有数据后再开）
+## 代码落点（评测机实际跑这些）
 
-| 改动 | 作用 | 门禁 |
-|------|------|------|
-| `FDU_ENABLE_HIP_GRAPH=1` | Graph capture 减 token 调度开销 | 官方推荐；TPOT↓ 且 SLA 过 |
-| KV FP8 **算子融合版** | 降 KV 显存 | **禁止独立反量化**；精度 Δ≤1% + 净 TPOT 收益 |
-
-## P3 — 仅 profiling 证明需要时
-
-| 改动 | 条件 |
-|------|------|
-| HIP FlashAttention（**prefill / TTFT**） | 长档 TTFT 主因是 O(S²) 注意力（见 DCU 实测 §2.2） |
-
-## 停止投入（DCU 实测证伪）
-
-| 方向 | 原因 |
-|------|------|
-| Decode GEMV 双缓冲 / 提 wave 占用 | 已在 HBM 101%，双缓冲 ±1.5% |
-| 持久化权重量化（讲义 49→40ms） | 赛题红线 |
-
-## SCNet 验证（主攻 8-16K · 50% 权重）
-
-```bash
-# 终端1：启动
-bash scripts/scnet_start_optimized.sh
-
-# 终端2：baseline 吞吐 + 精度
-cd ~/testdata
-./run_throughput.sh 8-16K 20
-./run_accuracy.sh hotpotqa 10
-
-# 终端3：长档 TPOT 分析（baseline 跑通后）
-# 记录 decode 步 KV read 时间占比，填入 report.md
+```
+launch.sh
+ ├─ source scripts/rocm_env.sh → phase1_env.sh   # 1.5 + Phase 门控
+ ├─ MODEL_PATH: /root → /data → $HOME            # Prefill 加载加速
+ ├─ --gpu-memory-utilization 0.94                # 1.1
+ ├─ --enable-prefix-caching                      # 1.3
+ ├─ --disable-log-requests --disable-log-stats   # 1.4
+ ├─ --dtype bfloat16 --served-model-name ...     # 1.7
+ ├─ python -m fdu_vllm.server                    # vllm_env.py 再设 ROCm/日志
+ └─ scripts/warmup_server.py --tier all          # 1.2（8-16K 优先）
 ```
 
-## 提交前核对（官方强调）
+`FDU_PHASE=1`（默认）：**不**安装 GQA / KV defrag / HIP Graph 钩子，避免未验证路径拖垮 SLA。
 
-- [ ] `docs/env_vars.md` 与 `launch.sh` 实际 env 一致
-- [ ] `report.md` 每项优化有 **±X% 吞吐 / ±Y ms TPOT** 量化贡献
-- [ ] KV 量化未删历史 token、未生成低精度权重缓存
-- [ ] 未改 batch scheduler / 自回归解码语义
+---
 
-## 评测机
+## 为什么这些「一定有把握」
 
-平台执行 `launch.sh` 即可；无需改 locked 参数。
+1. **不改计算语义** → 精度系数不易掉。  
+2. **不碰红线参数** → 不会因违规零分。  
+3. **相对 stock 增量清晰** → 可写进 `report.md` 量化贡献。  
+4. **平台已有先例**（富贵花开 84.74，SLA/精度扣分=0）说明同类 launch 路径可过评测。  
+5. **OOM 有回退**：`GPU_MEMORY_UTILIZATION` 一次只改 0.01，OOM → 0.93 → 0.92。
+
+---
+
+## SCNet 验证顺序（主攻 8–16K）
+
+```bash
+# 0) 静态检查
+bash scripts/verify_phase1_config.sh
+
+# 1) stock 对照（另开终端记 TTFT/TPOT/吞吐）
+cd ~/testdata && ./start_vllm.sh
+./run_throughput.sh 8-16K 20
+
+# 2) Phase 1 优化版
+bash scripts/scnet_start_optimized.sh   # PORT=8001
+cd ~/testdata
+# 对 8001 跑同等吞吐/精度
+bash ~/…/scripts/gate_check.sh quick
+```
+
+门禁：8–16K ≥ stock；TTFT/TPOT P99 ≤ baseline×1.5；精度 Δ≤1%；再平台提交。
+
+---
+
+## 下一步（有把握项跑通之后）
+
+| 优先级 | 项 | 条件 |
+|--------|----|------|
+| Phase 2 | KV 块/defrag deep hook、GQA | Phase 1 门禁通过 |
+| Phase 2 | HIP Graph | SCNet 长测稳定 |
+| Phase 3 | 融合 KV FP8 / HIP Attn | 分≥87 或 8–16K 仍差 >2 tok/s |
+
+详见 [deep_optimization_guide.md](./deep_optimization_guide.md) §四–§五。

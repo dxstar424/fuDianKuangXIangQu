@@ -28,17 +28,30 @@
 
 ## 3. 优化点与预期贡献
 
-> 官方要求：对每项优化做**量化贡献分析**。SCNet 实测后填入「实测贡献」列。
+> 官方要求：对每项优化做**量化贡献分析**。SCNet 实测后填入「实测贡献」列。  
+> **最有把握项清单**：[docs/easy_scoring.md](docs/easy_scoring.md)（Phase 1 默认开启）。
+
+### 3.1 Phase 1 最有把握项（相对 stock gpu=0.92）
+
+| 序号 | 优化项 | 默认 | 主攻指标 | 预期 | 实测贡献 |
+|------|--------|------|----------|------|----------|
+| 1.1 | `gpu_memory_utilization` 0.94 | 开 | 8–16K / 16–32K 吞吐 | 长档 KV 更充裕 | 待填 |
+| 1.2 | 分档 warmup（8–16K 优先） | 开 | TTFT P99 | 防首条 SLA 熔断 | 待填 |
+| 1.3 | `--enable-prefix-caching` | 开 | TTFT | 共享前缀降 prefill | 待填 |
+| 1.4 | disable-log-requests/stats | 开 | TPOT 微降 | 减 Python I/O | 待填 |
+| 1.5 | ROCm env（SDMA 等） | 开 | Decode 稳定 | 带宽/分配 | 待填 |
+| 1.6 | `FDU_ENABLE_KV_QUANT=0` | 强制 | 精度系数 | 保 k=1.0 | 待填 |
+| 1.7 | bf16 + 合规 served-name | 开 | 稳定性 | 与官方权重一致 | — |
+
+### 3.2 Phase 2+（门禁后再开，默认关）
 
 | 序号 | 优化项 | 阶段 | 主攻指标 | 预期 | 实测贡献 |
 |------|--------|------|----------|------|----------|
-| 1 | launch warmup + rocm env | 1 | TTFT P99 | TTFT 稳定 | 待填 |
 | 2 | GQA einsum decode | 2 | TPOT P99 | TPOT −5~10% | 待填 |
-| 3 | prefix caching | 2 | TTFT P99 | 长档 TTFT ↓ | 待填 |
-| 4 | KV defrag/tiered blocks | 2 | TPOT、长档吞吐 | 降碎片、稳 KV 读 | 待填 |
+| 3 | KV defrag/tiered blocks | 2 | TPOT、长档吞吐 | 降碎片、稳 KV 读 | 待填 |
+| 4 | HIP Graph capture | 2b | TPOT P99 | 调度开销 −5~15% | 待填 |
 | 5 | KV FP8 融合（非独立反量化） | 3 | 长档吞吐 | 显存↓ → 吞吐↑ | 待 A/B |
-| 6 | HIP Graph capture | 2b | TPOT P99 | 调度开销 −5~15% | 待填 |
-| 7 | HIP FlashAttention | 4 | TPOT P99 | TPOT −15~25%（profiling 后） | 暂缓 |
+| 6 | HIP FlashAttention | 4 | Prefill/TTFT | profiling 后 | 暂缓 |
 
 ## 4. Baseline 数据记录
 

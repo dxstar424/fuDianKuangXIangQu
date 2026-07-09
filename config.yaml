@@ -3,27 +3,31 @@
 # 禁止修改: max-num-seqs, max-num-batched-tokens, batch scheduler
 # ============================================================
 
+# --- Phase（1=最有把握 launch 项；2+=钩子）---
+# 运行时以环境变量 FDU_PHASE 为准；评测默认 1
+phase: 1
+
 # --- KV Cache 管理 ---
 kv_cache:
-  strategy: "defrag"
+  strategy: "none"                 # Phase 1：不装 defrag 钩子；Phase 2 改 defrag
   block_size: 16
-  gpu_memory_utilization: 0.94   # 提分：长档 KV 更充裕（launch 可覆盖）
+  gpu_memory_utilization: 0.94     # 相对 stock 0.92；长档 KV 更充裕
   enable_kv_quant: false           # 默认关，保精度系数
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7
 
 # --- Attention 后端 ---
 attention:
-  backend: "dcu_optimized"        # dcu_optimized | flash_attn
+  backend: "vllm_default"          # Phase 1：stock attention；Phase 2 改 dcu_optimized
   use_paged_attention: true
-  num_kv_heads: 32                # Qwen3.5-27B GQA
+  num_kv_heads: 32                 # Qwen3.5-27B GQA
   num_q_heads: 64
 
 # --- 执行路径（不触碰 batch scheduler）---
 executor:
-  enable_prefix_caching: true
-  use_cuda_graph: false           # 默认关；SCNet 稳定性验证后设 FDU_ENABLE_HIP_GRAPH=1
-  cuda_graph_max_bs: 1            # 并发=1
+  enable_prefix_caching: true      # Phase 1 必开
+  use_cuda_graph: false            # 默认关；SCNet 稳定性验证后设 FDU_ENABLE_HIP_GRAPH=1
+  cuda_graph_max_bs: 1             # 并发=1
 
 # --- 精度门禁 ---
 precision:

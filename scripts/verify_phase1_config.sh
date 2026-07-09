@@ -52,6 +52,21 @@ _check "warmup_server.py: three tiers" \
     && grep -q '8-16K' "$PROJ_DIR/scripts/warmup_server.py" \
     && grep -q '16-32K' "$PROJ_DIR/scripts/warmup_server.py"
 
+_check "warmup_server.py: 8-16K first in _PROFILES" \
+    python3 -c "
+from pathlib import Path
+t = Path(r'$PROJ_DIR/scripts/warmup_server.py').read_text(encoding='utf-8')
+i8 = t.find('(\"8-16K\"')
+i4 = t.find('(\"4-8K\"')
+assert i8 >= 0 and i4 >= 0 and i8 < i4, '8-16K must come before 4-8K'
+"
+
+_check "launch.sh: model path resolver" \
+    grep -q '_resolve_model_path' "$PROJ_DIR/launch.sh"
+
+_check "vllm_env.py: HSA_ENABLE_SDMA" \
+    grep -q 'HSA_ENABLE_SDMA' "$PROJ_DIR/src/fdu_vllm/vllm_env.py"
+
 _check "hooks.py: phase 1 early return" \
     grep -q 'cfg.phase <= 1' "$PROJ_DIR/src/fdu_vllm/hooks.py"
 

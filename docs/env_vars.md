@@ -18,17 +18,18 @@
 | `FDU_ENABLE_GQA_OPT` | `0` | `1` | GQA einsum 路径 |
 | `FDU_ENABLE_HIP_GRAPH` | `0` | `0` | HIP Graph decode |
 
-## 启动参数（launch.sh）
+## 启动参数（launch.sh · Phase 1 最有把握项）
 
-| 变量名 | 默认 | 说明 |
-|--------|------|------|
-| `MODEL_PATH` | `/data/Qwen3.5-27B` | 模型路径 |
-| `PORT` | `8000` | 服务端口 |
-| `GPU_MEMORY_UTILIZATION` | `0.94` | 显存利用率（提分关键） |
-| `DO_WARMUP` | `1` | 启动后分档 warmup |
-| `WARMUP_ROUNDS` | `1` | warmup 轮数 |
-| `WARMUP_TIER` | `all` | `all` / `4-8K` / `8-16K` / `16-32K` |
-| `ENABLE_PREFIX_CACHING` | `1` | vLLM prefix caching CLI |
+| 变量名 | 默认 | 说明 | 配置原因 |
+|--------|------|------|----------|
+| `MODEL_PATH` | 自动：`/root`→`/data`→`$HOME` | 模型路径 | SCNet PDF：`/root` 加载更快 |
+| `PORT` | `8000` | 服务端口 | 评测机默认 |
+| `GPU_MEMORY_UTILIZATION` | `0.94` | 显存利用率 | 相对 stock 0.92；长档 KV 更充裕 |
+| `DO_WARMUP` | `1` | 启动后分档 warmup | 稳 TTFT P99，防 SLA 熔断 |
+| `WARMUP_ROUNDS` | `1` | warmup 轮数 | 评测机可接受启动耗时 |
+| `WARMUP_TIER` | `all` | `all` 时 **先 8–16K** | 主攻 50% 权重档 |
+| `ENABLE_PREFIX_CACHING` | `1` | vLLM prefix caching CLI | 共享前缀降 TTFT |
+| `HEALTH_TIMEOUT` | `600` | 健康检查超时（秒） | 大模型加载慢 |
 
 ## ROCm/DCU（scripts/rocm_env.sh）
 

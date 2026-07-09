@@ -1,9 +1,15 @@
 #!/usr/bin/env python3
 """
-分档 warmup — 对齐官方三档上下文，稳定 TTFT P99（尤其 8-16K 50% 权重档）。
+分档 warmup — 对齐官方三档上下文，稳定 TTFT P99。
+
+策略（最有把握提分）：
+  - tier=all 时 **先跑 8-16K（50% 权重）**，再 4-8K / 16-32K
+  - 以 prefill 为主、decode 短输出（触发 JIT + 显存池，不拖垮启动）
+  - chat 失败时回退 /v1/completions
 
 用法:
   python scripts/warmup_server.py --host 127.0.0.1 --port 8000
+  python scripts/warmup_server.py --tier 8-16K --rounds 1
 """
 from __future__ import annotations
 
@@ -13,11 +19,12 @@ import sys
 import urllib.error
 import urllib.request
 
-# 近似 token 规模：中文约 1 字 ≈ 1 token
+# (name, prefill_chars≈tokens, max_tokens)
+# all 顺序：主攻档优先
 _PROFILES = [
-    ("4-8K", 6000, 128),    # prefill ~6k, decode 128
-    ("8-16K", 12000, 256),  # 主攻档：prefill ~12k
-    ("16-32K", 20000, 512), # 长档 prefill
+    ("8-16K", 12000, 64),   # 50% 权重，优先预热
+    ("4-8K", 6000, 32),
+    ("16-32K", 20000, 64),
 ]
 
 
@@ -32,22 +39,44 @@ def _prompt_chars(n: int) -> str:
     return (base * reps)[:n]
 
 
+def _post_json(url: str, payload: dict, timeout: int = 1800) -> None:
+    data = json.dumps(payload).encode("utf-8")
+    req = urllib.request.Request(
+        url,
+        data=data,
+        headers={"Content-Type": "application/json"},
+        method="POST",
+    )
+    with urllib.request.urlopen(req, timeout=timeout) as resp:
+        resp.read()
+
+
 def _request(host: str, port: int, prompt: str, max_tokens: int) -> None:
-    url = f"http://{host}:{port}/v1/chat/completions"
-    payload = json.dumps({
+    base = f"http://{host}:{port}"
+    chat_payload = {
         "model": "Qwen3.5-27B",
         "messages": [{"role": "user", "content": prompt}],
         "temperature": 0.0,
         "max_tokens": max_tokens,
         "stream": False,
-    }).encode("utf-8")
-    req = urllib.request.Request(
-        url, data=payload,
-        headers={"Content-Type": "application/json"},
-        method="POST",
+    }
+    try:
+        _post_json(f"{base}/v1/chat/completions", chat_payload)
+        return
+    except urllib.error.URLError:
+        pass
+
+    # 回退 completions（部分评测/自测脚本走此路径）
+    _post_json(
+        f"{base}/v1/completions",
+        {
+            "model": "Qwen3.5-27B",
+            "prompt": prompt,
+            "temperature": 0.0,
+            "max_tokens": max_tokens,
+            "stream": False,
+        },
     )
-    with urllib.request.urlopen(req, timeout=1800) as resp:
-        resp.read()
 
 
 def warmup(host: str, port: int, rounds: int, tier: str) -> None:
@@ -55,26 +84,41 @@ def warmup(host: str, port: int, rounds: int, tier: str) -> None:
     if tier != "all":
         profiles = [p for p in _PROFILES if p[0] == tier]
         if not profiles:
-            print(f"[warmup] unknown tier {tier}, use all|4-8K|8-16K|16-32K", file=sys.stderr)
+            print(
+                f"[warmup] unknown tier {tier}, use all|4-8K|8-16K|16-32K",
+                file=sys.stderr,
+            )
             sys.exit(1)
+
+    print(f"[warmup] host={host}:{port} rounds={rounds} tier={tier}")
+    print(f"[warmup] order: {' → '.join(p[0] for p in profiles)}")
 
     for r in range(rounds):
         for name, chars, max_tok in profiles:
             label = f"round {r + 1}/{rounds} tier {name}"
             try:
                 _request(host, port, _prompt_chars(chars), max_tok)
-                print(f"[warmup] {label} ok (prefill~{chars} chars, max_tokens={max_tok})")
+                print(
+                    f"[warmup] {label} ok "
+                    f"(prefill~{chars} chars, max_tokens={max_tok})"
+                )
             except urllib.error.URLError as e:
                 print(f"[warmup] {label} failed: {e}", file=sys.stderr)
                 sys.exit(1)
 
+    print("[warmup] all tiers done")
+
 
 def main() -> None:
-    p = argparse.ArgumentParser()
+    p = argparse.ArgumentParser(description="Phase 1 tiered warmup for TTFT P99")
     p.add_argument("--host", default="127.0.0.1")
     p.add_argument("--port", type=int, default=8000)
     p.add_argument("--rounds", type=int, default=1)
-    p.add_argument("--tier", default="all", choices=["all", "4-8K", "8-16K", "16-32K"])
+    p.add_argument(
+        "--tier",
+        default="all",
+        choices=["all", "4-8K", "8-16K", "16-32K"],
+    )
     args = p.parse_args()
     warmup(args.host, args.port, args.rounds, args.tier)
 

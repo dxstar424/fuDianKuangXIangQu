@@ -1,4 +1,7 @@
-"""在 import vllm 之前设置性能相关环境变量（低风险提分）。"""
+"""在 import vllm 之前设置性能相关环境变量（Phase 1 低风险提分）。
+
+与 scripts/rocm_env.sh 对齐：worker 子进程未必 source shell，故在 Python 侧再 setdefault。
+"""
 
 from __future__ import annotations
 
@@ -7,14 +10,22 @@ import os
 
 def configure_before_vllm_import() -> None:
     """赛题允许：启动参数 / 环境变量；不修改 locked CLI 参数。"""
-    # 降低 Python 侧日志开销
+    # ── 1.4 降低 Python 侧日志开销 ──
     os.environ.setdefault("VLLM_LOGGING_LEVEL", "WARNING")
     os.environ.setdefault("VLLM_CONFIGURE_LOGGING", "0")
 
-    # ROCm / DCU 常用吞吐优化（不影响精度）
+    # ── 1.5 ROCm / DCU（与 rocm_env.sh 一致，不影响精度）──
+    os.environ.setdefault("HIP_PLATFORM", "amd")
+    os.environ.setdefault("HIP_VISIBLE_DEVICES", "0")
     os.environ.setdefault("HIP_FORCE_DEV_KERNARG", "1")
     os.environ.setdefault("GPU_MAX_HW_QUEUES", "2")
+    os.environ.setdefault("HSA_ENABLE_SDMA", "1")
+    os.environ.setdefault("PYTORCH_HIP_ALLOC_CONF", "expandable_segments:True")
 
-    # 避免编译线程过多抢占（单请求并发=1）
+    # 避免编译/CPU 线程过多抢占（评测并发=1）
     os.environ.setdefault("OMP_NUM_THREADS", "8")
     os.environ.setdefault("TORCHINDUCTOR_COMPILE_THREADS", "1")
+
+    # Phase 1 默认：关 KV 量化（保精度系数）
+    os.environ.setdefault("FDU_ENABLE_KV_QUANT", "0")
+    os.environ.setdefault("FDU_PHASE", "1")

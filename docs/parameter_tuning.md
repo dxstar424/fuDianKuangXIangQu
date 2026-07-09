@@ -36,10 +36,11 @@
 |------|--------|------|------|
 | `FDU_ENABLE` | `1` | 总开关 | 调试 stock 时设 0 |
 | `FDU_ENABLE_KV_QUANT` | `0` | KV 在线 FP8 | **默认关**；G 确认精度+净 TPOT 后再开 |
-| `FDU_ENABLE_GQA_OPT` | `1` | GQA einsum decode | 降 TPOT；合并后须 token 一致性 |
+| `FDU_PHASE` | `1` | 阶段门控 | `1`=仅 Phase 1；`2+` 才开钩子 |
+| `FDU_ENABLE_GQA_OPT` | `0`（Phase1）/`1`（Phase2） | GQA einsum | Phase 1 关；门禁后再开 |
 | `FDU_ENABLE_HIP_GRAPH` | `0` | Graph capture | TPOT↓；长测 SLA 不过则关 |
-| `FDU_KV_CACHE_STRATEGY` | `defrag` | KV 块策略 | defrag / prealloc / dynamic |
-| `FDU_ATTENTION_BACKEND` | `dcu_optimized` | Attention 路径 | 非 DCU 环境自动 fallback |
+| `FDU_KV_CACHE_STRATEGY` | `none`（Phase1）/`defrag` | KV 块策略 | Phase 1 不装钩子 |
+| `FDU_ATTENTION_BACKEND` | `vllm_default`（Phase1） | Attention 路径 | Phase 1 走 stock attention |
 
 ### 2.3 ROCm 环境（微优化，一般不动）
 
@@ -65,14 +66,19 @@
 ## 3. 推荐调参顺序（整合负责人执行）
 
 ```
+【最有把握 · Phase 1 默认已开，一般只做 A/B】
 1. GPU_MEMORY_UTILIZATION  0.92 → 0.93 → 0.94（OOM 则回退）
-2. 确认 warmup + prefix 生效（看 launch 日志）
-3. FDU_ENABLE_GQA_OPT=1 合并后验证
-4. KV defrag / FP8（须 G 门禁）
-5. FDU_ENABLE_HIP_GRAPH=1（须 G 长测）
+2. 确认 warmup + prefix 生效（看 launch 日志「Phase 1 sure-win」）
+3. 关/开 ENABLE_PREFIX_CACHING 做一次 A/B（盲测收益）
+
+【Phase 1 门禁通过后再动】
+4. FDU_PHASE=2 + FDU_ENABLE_GQA_OPT=1（须 token 一致性）
+5. KV defrag / FP8（须 G 门禁）
+6. FDU_ENABLE_HIP_GRAPH=1（须 G 长测）
 ```
 
-**一次只改一项**，改完提交到集成分支，等 G 评测后再动下一项。
+**一次只改一项**，改完提交到集成分支，等 G 评测后再动下一项。  
+清单见 [easy_scoring.md](./easy_scoring.md)。
 
 ---
 

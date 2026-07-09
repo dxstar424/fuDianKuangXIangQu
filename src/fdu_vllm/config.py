@@ -54,8 +54,13 @@ class FduConfig:
                 return default
             return v not in ("0", "false", "False", "")
 
-        phase_raw = os.environ.get("FDU_PHASE", "1")
-        phase = 1 if phase_raw in ("1", "phase1") else int(phase_raw) if phase_raw.isdigit() else 2
+        phase_raw = os.environ.get("FDU_PHASE", str(raw.get("phase", 1)))
+        if phase_raw in ("1", "phase1"):
+            phase = 1
+        elif str(phase_raw).isdigit():
+            phase = int(phase_raw)
+        else:
+            phase = 2
 
         def _phase_default(phase1_val, phase2_val):
             return phase1_val if phase <= 1 else phase2_val

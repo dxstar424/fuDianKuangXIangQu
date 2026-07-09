@@ -1,5 +1,16 @@
 # 变更日志
 
+## [v0.2.6] - 2026-07-09
+
+### 最有把握提分项加固（Phase 1）
+- 重写 `docs/easy_scoring.md`：相对 stock 的 1.1–1.7 清单 + 代码落点
+- `docs/deep_optimization_guide.md` §三增加「最有把握提分步骤」表
+- `launch.sh`：模型路径 `/root`→`/data` 自动解析；健康检查支持 `/v1/models`；超时 600s
+- `warmup_server.py`：`tier=all` 时 **先 8–16K**；chat 失败回退 completions；缩短 decode
+- `vllm_env.py`：与 `rocm_env.sh` 对齐（SDMA / expandable_segments 等）
+- `config.yaml`：Phase 1 默认 `strategy=none`、`backend=vllm_default`
+- `report.md` / `parameter_tuning.md` / `env_vars.md`：同步最有把握项说明
+
 ## [v0.2.5] - 2026-07-09
 
 ### Phase 1 代码闭环

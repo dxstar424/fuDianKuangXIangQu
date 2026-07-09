@@ -127,16 +127,16 @@ Phase 6  文档量化贡献 + 平台提交
 | Phase | 优化项                         | 代码路径                                           | 预期收益                    | 状态          | 下一动作                   |
 | ----- | --------------------------- | ---------------------------------------------- | ----------------------- | ----------- | ---------------------- |
 | 0     | SCNet 环境 + baseline         | `scripts/scnet_setup.sh`, `record_baseline.sh` | 建立对照基线                  | 脚本就绪        | **SCNet 实机跑 baseline** |
-| 1     | 显存 0.94 + warmup + ROCm env | `launch.sh`, `warmup_server.py`, `vllm_env.py` | 8-16K +1~3 tok/s，稳 TTFT | 已实现         | gate_check + 平台提交      |
-| 1     | 关日志 + bf16                  | `launch.sh`                                    | 微优化 TPOT                | 已实现         | 随 Phase 1 提交           |
-| 2     | GQA einsum decode           | `fdu_vllm/gqa_decode.py`, `attention.py`       | TPOT −5~10%             | 已实现         | token 一致性验证            |
-| 2     | prefix caching              | `launch.sh` `--enable-prefix-caching`          | 长档 TTFT                 | ⚠️ 见 §4.1   | 修复 launch 默认值          |
+| 1     | **最有把握 1.1–1.7**（见 easy_scoring） | `launch.sh` + `warmup` + `rocm_env` + `vllm_env` | 保 SLA + 小幅吞吐↑           | **v0.2.6 加固完成** | gate_check + 平台提交      |
+| 1     | 显存 0.94 + warmup（8–16K 优先） | `launch.sh`, `warmup_server.py`                | 8-16K +1~3 tok/s，稳 TTFT | 已实现         | SCNet A/B vs stock 0.92 |
+| 1     | prefix + 关日志 + ROCm + bf16 | `launch.sh`, `vllm_env.py`                     | TTFT / 微 TPOT            | 已实现         | 随 Phase 1 提交           |
+| 2     | GQA einsum decode           | `fdu_vllm/gqa_decode.py`, `attention.py`       | TPOT −5~10%             | 默认关（PHASE=1） | `FDU_PHASE=2` 后门禁      |
 | 2     | KV defrag / tiered blocks   | `fdu_vllm/kv_cache.py`, `src/kv_cache/`        | 长档显存、降碎片（**官方 P1**） | 骨架          | **验证 deep hook + 长档 TPOT** |
 | 2     | TPOT profiling（长档 KV 读路径） | `src/utils/profiling.py`                       | 定位 decode 瓶颈            | 待做          | baseline 后首次 profiling   |
 | 2b    | HIP Graph（graph capture）  | `fdu_vllm/hip_graph.py`                        | TPOT −5~15%，减调度开销       | 默认关         | GQA 验证后并行长测             |
 | 3     | KV FP8 **算子融合**           | `fdu_vllm/kv_fp8.py` + attention             | 长档吞吐（须净收益）              | 默认关         | 证伪独立反量化后再开             |
 | 4     | HIP FlashAttention          | `attention/dcu_attention.py`, `hip_kernels/`   | Prefill TTFT（非 decode 主因） | 骨架+fallback | **仅 prefill/O(S²) 证伪后再做** |
-| 6     | 文档 / 提交                     | `report.md`, `changelog.md`                    | —                       | 部分完成        | 回填三档数据                 |
+| 6     | 文档 / 提交                     | `report.md`, `changelog.md`, `easy_scoring.md` | —                       | 文档已对齐       | 回填三档数据                 |
 
 
 ### 2.2 优先级速查（日常执行看这里）
