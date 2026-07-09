@@ -23,14 +23,15 @@ def _find_config() -> Path:
 
 @dataclass
 class FduConfig:
+    phase: int = 1
     enable: bool = True
-    kv_strategy: str = "defrag"
-    attention_backend: str = "dcu_optimized"
-    enable_kv_quant: bool = True
+    kv_strategy: str = "none"
+    attention_backend: str = "vllm_default"
+    enable_kv_quant: bool = False
     enable_prefix_cache: bool = True
     enable_hip_graph: bool = False
-    enable_gqa_opt: bool = True
-    gpu_memory_utilization: float = 0.92
+    enable_gqa_opt: bool = False
+    gpu_memory_utilization: float = 0.94
     defrag_threshold: float = 0.7
     kv_quant_dtype: str = "fp8"
     raw: dict = field(default_factory=dict)
@@ -53,18 +54,33 @@ class FduConfig:
                 return default
             return v not in ("0", "false", "False", "")
 
+        phase_raw = os.environ.get("FDU_PHASE", "1")
+        phase = 1 if phase_raw in ("1", "phase1") else int(phase_raw) if phase_raw.isdigit() else 2
+
+        def _phase_default(phase1_val, phase2_val):
+            return phase1_val if phase <= 1 else phase2_val
+
         return cls(
+            phase=phase,
             enable=_bool("FDU_ENABLE", True),
-            kv_strategy=os.environ.get("FDU_KV_CACHE_STRATEGY", kv.get("strategy", "defrag")),
-            attention_backend=os.environ.get("FDU_ATTENTION_BACKEND", attn.get("backend", "dcu_optimized")),
-            enable_kv_quant=_bool("FDU_ENABLE_KV_QUANT", kv.get("enable_kv_quant", True)),
+            kv_strategy=os.environ.get(
+                "FDU_KV_CACHE_STRATEGY",
+                _phase_default("none", kv.get("strategy", "defrag")),
+            ),
+            attention_backend=os.environ.get(
+                "FDU_ATTENTION_BACKEND",
+                _phase_default("vllm_default", attn.get("backend", "dcu_optimized")),
+            ),
+            enable_kv_quant=_bool(
+                "FDU_ENABLE_KV_QUANT", kv.get("enable_kv_quant", False)
+            ),
             enable_prefix_cache=_bool(
                 "FDU_ENABLE_PREFIX_CACHE", exe.get("enable_prefix_caching", True)
             ),
             enable_hip_graph=_bool("FDU_ENABLE_HIP_GRAPH", exe.get("use_cuda_graph", False)),
-            enable_gqa_opt=_bool("FDU_ENABLE_GQA_OPT", True),
+            enable_gqa_opt=_bool("FDU_ENABLE_GQA_OPT", _phase_default(False, True)),
             gpu_memory_utilization=float(
-                os.environ.get("GPU_MEMORY_UTILIZATION", kv.get("gpu_memory_utilization", 0.92))
+                os.environ.get("GPU_MEMORY_UTILIZATION", kv.get("gpu_memory_utilization", 0.94))
             ),
             defrag_threshold=float(kv.get("defrag_threshold", 0.7)),
             kv_quant_dtype=kv.get("kv_quant_dtype", "fp8"),

@@ -1,5 +1,41 @@
 # 变更日志
 
+## [v0.2.5] - 2026-07-09
+
+### Phase 1 代码闭环
+- 新增 `scripts/phase1_env.sh`：1.1–1.7 专用环境，默认关闭 Phase 2+ 钩子
+- 新增 `src/fdu_vllm/phase1.py`：Phase 1 配置校验与日志
+- 新增 `scripts/verify_phase1_config.sh`、`scripts/run_phase1_gate.sh`
+- `hooks.py`：`FDU_PHASE=1` 时仅 launch CLI 优化，不安装 GQA/KV/attention 钩子
+- `config.py`：Phase 1 默认 `kv_quant=false`、`gpu=0.94`、`gqa=false`
+- `launch.sh`：启动时打印 Phase 1 配置摘要
+- `Dockerfile`：写入 Phase 1 默认 ENV
+- 修复 `scnet_setup.sh` testdata 存在性判断
+
+## [v0.2.4] - 2026-07-09
+
+### DCU decode 访存实测解读
+- 新增 `docs/dcu_decode_benchmark_interpretation.md`（gfx936 微基准：权重 IO 95%、双缓冲证伪）
+- 调整 roadmap：HIP Graph↑、GEMV 双缓冲↓、FlashAttn 主攻 prefill/TTFT、KV FP8 预期修正
+
+## [v0.2.3] - 2026-07-09
+
+### 四人分工与协作
+- 新增 `docs/team_division.md`：I 整合/Git、P1 KV/Prefill、P2 Decode、G 门禁/定期评测
+- 新增 `docs/parameter_tuning.md`：参数作用、A/B 表、合并冲突区（整合负责人维护）
+- 新增 `docs/deep_optimization_guide.md`：必须(M0–M3) vs 冲刺(S1–S4) 深度提分指南
+- 更新 `optimization_roadmap.md` §4 分工、赛程负责人、7/13 main 大合并里程碑
+- `easy_scoring.md` / roadmap 增加深度指南入口
+
+## [v0.2.2] - 2026-07-09
+
+### 官方指导对齐
+- 新增 `docs/official_guidance_interpretation.md`（zhaorq 2026-07-09 技术指导解读）
+- 调整 `optimization_roadmap.md`：KV 块/defrag 上调 P1；HIP Graph 提前 P2；KV FP8 融合门禁
+- 更新 `easy_scoring.md`：Prefill/Decode 分阶段优先级 + 提交核对清单
+- 更新 `report.md`：优化贡献量化表 + 合规声明补充
+- `launch.sh`：修复 `FDU_ENABLE_PREFIX_CACHE` 默认值
+
 ## [v0.2.1] - 2026-07-08
 
 ### 最容易拿分（跑分指南对齐）

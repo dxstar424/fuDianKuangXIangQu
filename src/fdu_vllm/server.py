@@ -14,8 +14,12 @@ def main() -> None:
     configure_before_vllm_import()
 
     from fdu_vllm import activate
+    from fdu_vllm.phase1 import validate_phase1_env
 
     activate()
+    for warning in validate_phase1_env():
+        print(f"[fdu_vllm] WARNING: {warning}", file=sys.stderr)
+
     from vllm.entrypoints.openai.api_server import main as vllm_main
 
     vllm_main()

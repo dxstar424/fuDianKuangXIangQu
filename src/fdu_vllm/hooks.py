@@ -30,6 +30,7 @@ def activate() -> None:
     global _ACTIVE, _ATTENTION, _KV_QUANT, _EXEC, _CACHE_MGR
 
     from fdu_vllm.config import get_config
+    from fdu_vllm.phase1 import log_phase1_summary
 
     cfg = get_config()
     if not cfg.enable:
@@ -38,8 +39,22 @@ def activate() -> None:
 
     _ensure_src_path()
     _ACTIVE = True
+    log_phase1_summary()
+
+    # Phase 1：仅 launch.sh CLI + vllm_env；不安装 Phase 2+ 运行时钩子
+    if cfg.phase <= 1:
+        logger.info(
+            "Phase 1 mode: launch flags only (gpu=%.2f prefix=%s kv_quant=%s)",
+            cfg.gpu_memory_utilization,
+            cfg.enable_prefix_cache,
+            cfg.enable_kv_quant,
+        )
+        _try_patch_vllm_worker(cfg)
+        return
+
     logger.info(
-        "FDU plugin active: kv=%s attn=%s kv_quant=%s prefix=%s hip_graph=%s gqa=%s",
+        "FDU plugin active (phase=%s): kv=%s attn=%s kv_quant=%s prefix=%s hip_graph=%s gqa=%s",
+        cfg.phase,
         cfg.kv_strategy,
         cfg.attention_backend,
         cfg.enable_kv_quant,
@@ -54,7 +69,11 @@ def activate() -> None:
         _KV_QUANT = KVQuantHooks(enabled=True, dtype=cfg.kv_quant_dtype)
         _KV_QUANT.install()
 
-    if cfg.kv_strategy in ("defrag", "prealloc", "dynamic"):
+    if cfg.kv_strategy not in ("none", "disabled", "") and cfg.kv_strategy in (
+        "defrag",
+        "prealloc",
+        "dynamic",
+    ):
         from fdu_vllm.kv_cache import install_kv_hooks
 
         _CACHE_MGR = install_kv_hooks(
@@ -63,7 +82,7 @@ def activate() -> None:
             defrag_threshold=cfg.defrag_threshold,
         )
 
-    if cfg.attention_backend == "dcu_optimized":
+    if cfg.attention_backend in ("dcu_optimized", "flash_attn"):
         from fdu_vllm.attention import install_attention_hooks
 
         _ATTENTION = install_attention_hooks(

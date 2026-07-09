@@ -1,16 +1,22 @@
 # 环境变量说明（评测提交必填）
 
-## FDU 优化开关
+## Phase 阶段
 
-| 变量名 | 默认 | 作用 | 配置原因 |
-|--------|------|------|----------|
-| `FDU_ENABLE` | `1` | 总开关 | 关闭则等同 stock vLLM |
-| `FDU_KV_CACHE_STRATEGY` | `defrag` | KV 块分配策略 | defrag/prealloc/dynamic |
-| `FDU_ATTENTION_BACKEND` | `dcu_optimized` | Attention 路径 | HIP kernel + GQA fallback |
-| `FDU_ENABLE_KV_QUANT` | `0` | KV 在线 FP8（**默认关**，保精度） |
-| `FDU_ENABLE_PREFIX_CACHE` | `1` | Prefix 缓存 | 降 TTFT（长上下文） |
-| `FDU_ENABLE_GQA_OPT` | `1` | GQA einsum 路径 | 降 TPOT memory bound |
-| `FDU_ENABLE_HIP_GRAPH` | `0` | HIP Graph decode | 默认关，SCNet 长测通过后启用 |
+| 变量名 | 默认 | 作用 |
+|--------|------|------|
+| `FDU_PHASE` | `1` | `1`=仅 launch/ROCm（Phase 1）；`2+`=启用 GQA/KV/attention 钩子 |
+
+## FDU 优化开关（Phase 2+，Phase 1 默认关）
+
+| 变量名 | Phase 1 默认 | Phase 2+ 默认 | 作用 |
+|--------|-------------|--------------|------|
+| `FDU_ENABLE` | `1` | `1` | 总开关 |
+| `FDU_KV_CACHE_STRATEGY` | `none` | `defrag` | KV 块分配策略 |
+| `FDU_ATTENTION_BACKEND` | `vllm_default` | `dcu_optimized` | Attention 路径 |
+| `FDU_ENABLE_KV_QUANT` | `0` | `0` | KV 在线 FP8（默认关，保精度） |
+| `FDU_ENABLE_PREFIX_CACHE` | `1` | `1` | Prefix 缓存（配合 launch CLI） |
+| `FDU_ENABLE_GQA_OPT` | `0` | `1` | GQA einsum 路径 |
+| `FDU_ENABLE_HIP_GRAPH` | `0` | `0` | HIP Graph decode |
 
 ## 启动参数（launch.sh）
 

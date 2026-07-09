@@ -30,6 +30,7 @@ export GPU_MEMORY_UTILIZATION
 
 # 容易拿分：先保精度，KV 在线量化默认关（验证通过后再 FDU_ENABLE_KV_QUANT=1）
 export FDU_ENABLE_KV_QUANT="${FDU_ENABLE_KV_QUANT:-0}"
+export FDU_ENABLE_PREFIX_CACHE="${FDU_ENABLE_PREFIX_CACHE:-1}"
 
 VLLM_ARGS=(
     --model "${MODEL_PATH}"
@@ -48,6 +49,25 @@ VLLM_ARGS=(
 if [[ "${ENABLE_PREFIX_CACHING}" == "1" ]] && [[ "${FDU_ENABLE_PREFIX_CACHE}" == "1" ]]; then
     VLLM_ARGS+=(--enable-prefix-caching)
 fi
+
+_log_phase1_config() {
+    echo "[launch] === Phase 1 config (FDU_PHASE=${FDU_PHASE:-1}) ==="
+    echo "[launch]   1.1 GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}"
+    echo "[launch]   1.2 DO_WARMUP=${DO_WARMUP} WARMUP_TIER=${WARMUP_TIER} ROUNDS=${WARMUP_ROUNDS}"
+    echo "[launch]   1.3 ENABLE_PREFIX_CACHING=${ENABLE_PREFIX_CACHING}"
+    echo "[launch]   1.4 --disable-log-requests --disable-log-stats"
+    echo "[launch]   1.5 ROCm env via scripts/rocm_env.sh"
+    echo "[launch]   1.6 FDU_ENABLE_KV_QUANT=${FDU_ENABLE_KV_QUANT}"
+    echo "[launch]   1.7 --dtype bfloat16 --served-model-name Qwen3.5-27B --max-model-len ${MAX_MODEL_LEN}"
+    if [[ "${ENABLE_PREFIX_CACHING}" == "1" ]] && [[ "${FDU_ENABLE_PREFIX_CACHE}" == "1" ]]; then
+        echo "[launch]   prefix caching: ON"
+    else
+        echo "[launch]   prefix caching: OFF"
+    fi
+    echo "[launch] =========================================="
+}
+
+_log_phase1_config
 
 _start_server() {
     exec python -m fdu_vllm.server "${VLLM_ARGS[@]}" "$@"

@@ -7,8 +7,14 @@ if [[ ! -f "$PROJ/launch.sh" ]]; then
     PROJ="$(cd "$(dirname "$0")/.." && pwd)"
 fi
 
-export MODEL_PATH="${MODEL_PATH:-$HOME/Qwen3.5-27B}"
+# 模型优先 /root（PDF copy 后加载快），否则家目录
+if [[ -d /root/Qwen3.5-27B ]]; then
+    export MODEL_PATH="${MODEL_PATH:-/root/Qwen3.5-27B}"
+else
+    export MODEL_PATH="${MODEL_PATH:-$HOME/Qwen3.5-27B}"
+fi
 export PORT="${PORT:-8001}"
+export FDU_PHASE="${FDU_PHASE:-1}"
 export DO_WARMUP="${DO_WARMUP:-1}"
 export WARMUP_TIER="${WARMUP_TIER:-all}"
 

@@ -21,7 +21,7 @@ if [[ ! -d "$MODEL_DIR/config.json" ]] && [[ ! -f "$MODEL_DIR/config.json" ]]; t
 fi
 
 # 3. 下载 testdata
-if [[ ! -d "$HOME/testdata/start_vllm.sh" ]] && [[ ! -f "$HOME/testdata/start_vllm.sh" ]]; then
+if [[ ! -f "$HOME/testdata/start_vllm.sh" ]]; then
     cd "$HOME"
     curl -f -C - -o testdata.tar.gz "$TESTDATA_URL"
     mkdir -p ./testdata
