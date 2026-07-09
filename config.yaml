@@ -1,25 +1,27 @@
 # ============================================================
-# FDU SCCSCC26 - 可调参数声明
-# 策略: config 级参数通过 launch.sh 传入 vLLM
-#       source 级参数通过 env var 控制 vLLM 源码 patch
+# FDU SCCSCC26 — 可调参数声明
+# 当前方案为 L1（仅 vLLM 启动参数，无源码改动 / 无 HIP kernel）。
+# 锁定参数与官方 start_vllm.sh 一致，不可调整；仅 optimization 段可调。
 # ============================================================
 
-# --- vLLM 原生参数（由 launch.sh 传入）---
-server:
-  max_num_seqs: 256               # 最大并发序列数（baseline: 128）
-  max_num_batched_tokens: 8192    # 单 batch 最大 token 数（baseline: 4096）
-  gpu_memory_utilization: 0.95    # GPU 显存利用率（baseline: 0.92）
-  enable_prefix_caching: true     # 共享前缀 KV 复用
-  compilation_cudagraph_mode: 2   # HIP Graph 全量图捕获
+# --- 官方锁定参数（与评测命令一致，不得修改）---
+locked:
+  dtype: bfloat16
+  tensor_parallel_size: 1
+  max_num_seqs: 128
+  max_num_batched_tokens: 4096
+  gpu_memory_utilization: 0.95
+  served_model_name: Qwen3.5-27B
+  enable_thinking: false          # --default-chat-template-kwargs
+  reasoning_parser: qwen3
+  tool_call_parser: qwen3_coder
+  # 采样参数由评测客户端强制指定并锁定: temperature=0, max_tokens=1024
 
-# --- FDU 源码 patch 参数（通过环境变量控制）---
+# --- 优化项（合规、可调；逐项本地验证后再在 launch.sh 启用）---
 optimization:
-  enable_kv_quant: true           # KV Cache FP8 在线量化
-  kv_quant_dtype: "fp8"           # 量化类型: fp8 | int8
-  enable_hip_graph: true          # HIP Graph 捕获
-  scheduler_policy: "length_aware" # 调度策略: length_aware | fcfs
-  enable_hip_flash_attn: false    # HIP FlashAttention kernel（待验证后开启）
+  kv_cache_dtype: auto            # auto(=bf16) | fp8 | fp8_e4m3 | fp8_e5m2
+                                  # 实验 A：验证 吞吐↑ 且 精度 Δ≤1% 后改为 fp8
 
-# --- 精度控制 ---
+# --- 精度闸门（用于自查，非启动参数）---
 precision:
-  accuracy_tolerance: 0.01        # 容忍精度下降上限
+  accuracy_tolerance: 0.01        # 四任务相对基线跌幅 Δ ≤ 1% → 精度系数 1.0

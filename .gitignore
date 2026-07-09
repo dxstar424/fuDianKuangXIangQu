@@ -7,4 +7,5 @@ results/
 .venv/
 venv/
 .env
-photos/AGENTS.md
+AGENTS.md
+CLAUDE.md

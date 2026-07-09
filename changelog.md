@@ -1,23 +1,57 @@
 # 变更日志
 
-## [v0.3.0] - 2026-07-09
-
-### 改动
-- **策略变更**: 放弃 monkey-patch 运行时注入，改为直接修改 vLLM 源码
-- `launch.sh`: 新增 `--enable-prefix-caching`、`--compilation-config`（HIP Graph）、`--max-num-seqs 256`、`--max-num-batched-tokens 8192`
-- `config.yaml`: 精简为两层（vLLM 原生参数 + FDU patch 参数）
-- `scripts/explore_vllm.sh`: 新增，DCU fork 结构探索脚本
-- `plugin.py`: 保留为参考文档，不再运行时注入
-
-### 预期效果
-- Prefix Caching: prefill 减少 30-50%
-- HIP Graph: kernel launch 开销消除
-- 更大 batch: 吞吐量提升
-
-### 实际结果
-- 待 DCU 平台验证
+> 格式：每条记录 **改动 → 预期效果 → 实测结果**（大赛提交强制要求，评委据此判断系统性探索 vs 随机试参）。
+> 评测口径：初赛**并发固定为 1**、temperature=0、每条输出 1024 token，输入分 4-8K / 8-16K / 16-32K 三档（权重 20% / 50% / 30%）。
+> 判分：吞吐相对官方 baseline 的提升；SLA 硬闸门 TTFT P99 与 TPOT P99 均 ≤ baseline×1.5，超则该档清零；精度四任务跌幅 Δ≤1% 系数为 1.0。
 
 ---
 
-## [v0.2.0] - 2026-07-08
-（同上，略）
+## [已放弃] 实验 A：KV Cache FP8 在线量化 — 2026-07-09
+
+### 改动
+- `results/sh/start_vllm_fp8.sh`：官方锁定命令 + `--kv-cache-dtype fp8`。
+
+### 预期
+- KV Cache bf16→fp8 减半每 token 读取量 → TPOT↓ → 吞吐↑，16-32K 档收益最大。
+
+### 实测（10 条采样，见 `results/photos/result.md` 第二部分）
+| 档位 | 基线吞吐 | FP8 吞吐 | 基线 TTFT P99 | FP8 TTFT P99 | 基线 TPOT P99 | FP8 TPOT P99 |
+|------|---------|---------|--------------|-------------|--------------|-------------|
+| 4-8K   | 12.21 | **10.65** ▼12.8% | 4546  | **26627** (SLA 爆) | 69.36 | 71.13 |
+| 8-16K  | 7.24  | 7.10  ▼1.9%  | 15644 | 17253              | 70.69 | 73.87 |
+| 16-32K | 3.22  | 2.90  ▼9.9%  | 28708 | 31802              | 73.25 | 76.51 |
+
+精度：hotpotqa 67.71（持平）、gov_report 34.17（↓0.45），retrieval/aggregation 未完成。
+
+### 结论
+**放弃。** 三档吞吐全面倒退，4-8K 档 TTFT P99 从 4.5s 暴涨至 26.6s（×5.9，远超 SLA 上限 1.5×baseline），该档直接判零。
+根因：并发=1 时 KV 总量小，fp8 量化/反量化每步的额外计算开销 > 省下的带宽收益。prefill 阶段大量 KV 写入触发密集 quantize 操作，是 TTFT 爆炸的主因。
+经验：带宽墙场景下，**减少字节数但增加每字节计算量的优化可能适得其反**——必须确认"省的带宽时间 > 多的计算时间"。
+
+---
+
+## [基线] 官方 Baseline 复现 — 2026-07-09
+
+### 改动
+- 使用官方 `start_vllm.sh`（stock vLLM 0.18.1，无任何自定义）复现基线，取每档前 10 条。
+
+### 预期
+- 建立对照基准，作为后续所有优化的相对提升起点与 SLA 阈值来源。
+
+### 实测（10 条采样，见 `results/photos/result.md`）
+| 档位 | 输出吞吐 (tok/s) | TTFT P99 (ms) | TPOT P99 (ms) |
+|------|-----------------|---------------|---------------|
+| 4-8K   | 12.21 | 4546.49  | 69.36 |
+| 8-16K  | 7.24  | 15643.63 | 70.69 |
+| 16-32K | 3.22  | 28707.83 | 73.25 |
+
+精度（10 条）：hotpotqa 67.71 · gov_report 34.62 · retrieval_multi_point 100.00 · aggregation_keyword_aggregation 100.00
+
+---
+
+## 策略修正说明 — 2026-07-09
+
+放弃早期"高并发大 batch"方向（`--max-num-seqs 256` / `--max-num-batched-tokens 8192` / prefix caching）。
+原因：初赛**并发固定为 1**，批处理类优化无效，且这些参数被评测机锁定。有效方向收敛为单请求长上下文的
+**KV Cache 显存/带宽优化、算子/kernel 优化、执行路径优化**。`src/` 下的 HIP kernel / 自定义调度保留为
+L2/L3 参考实现，尚未接入 vLLM 运行时，非提交必要条件。
