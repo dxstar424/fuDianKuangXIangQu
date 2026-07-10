@@ -79,7 +79,7 @@
 
 | 顺序 | 步骤 | 默认 | 代码 | 把握理由 |
 |------|------|------|------|----------|
-| ① | 显存 `0.92→0.94` | 开 | `launch.sh` `--gpu-memory-utilization` | 长档 KV 线性涨；不改语义 |
+| ① | 显存 `0.92→0.95` | 开 | `launch.sh` `--gpu-memory-utilization` | 长档 KV 线性涨；不改语义；OOM→0.94 |
 | ② | 分档 warmup（**8–16K 优先**） | 开 | `warmup_server.py` | 稳 TTFT P99，防首条熔断 |
 | ③ | Prefix caching | 开 | `--enable-prefix-caching` | 成本极低；共享前缀降 TTFT |
 | ④ | 关 log-requests/stats | 开 | `launch.sh` + `vllm_env.py` | 减 Python I/O，无精度风险 |
@@ -94,8 +94,8 @@
 
 | 项 | 内容 |
 |----|------|
-| **优化点** | `gpu_memory_utilization`：0.90–0.92 → **0.94**（可 A/B 到 0.93/0.95） |
-| **具体操作** | 在 `launch.sh` 设 `GPU_MEMORY_UTILIZATION=0.94`；对应 vLLM `--gpu-memory-utilization 0.94`。**禁止**改 `max-num-seqs` / `max-num-batched-tokens`。一次只改 0.01，记入 `parameter_tuning.md` A/B 表。 |
+| **优化点** | `gpu_memory_utilization`：0.90–0.92 → **0.95**（OOM 回退 0.94/0.93） |
+| **具体操作** | 在 `launch.sh` 设 `GPU_MEMORY_UTILIZATION=0.95`；对应 vLLM `--gpu-memory-utilization 0.95`。**禁止**改 `max-num-seqs` / `max-num-batched-tokens`。一次只改 0.01，记入 `parameter_tuning.md` A/B 表。 |
 | **收益侧重** | **8–16K、16–32K**（KV 线性膨胀，池子不够会 OOM/抖动拖垮吞吐） |
 | **风险** | >0.95 易 OOM → 完成率下降或 TTFT 尖刺。**应对**：OOM 立即回退 0.93→0.92；每次改完跑 `run_throughput.sh 8-16K 20`。 |
 | **精度** | 无直接影响。 |

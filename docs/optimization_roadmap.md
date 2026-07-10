@@ -292,7 +292,7 @@ Phase 6  文档量化贡献 + 平台提交
 
 | 开关                            | 开启条件                      | 关闭/回退条件            |
 | ----------------------------- | ------------------------- | ------------------ |
-| `GPU_MEMORY_UTILIZATION=0.94` | 默认开                       | OOM → 降到 0.92      |
+| `GPU_MEMORY_UTILIZATION=0.95` | 默认开 | OOM → 降到 0.94 |
 | `FDU_ENABLE_KV_QUANT=1`       | `gate_check full` 四类 Δ≤1% | 任一任务 Δ>1% → 关      |
 | `FDU_ENABLE_HIP_GRAPH=1`      | SCNet 长测 8-16K SLA 通过     | TPOT P99 回归 → 关    |
 | HIP FlashAttention 深入开发       | Phase 1–3 完成且分数 ≥87       | 编译失败 / 2 天无收益 → 停  |

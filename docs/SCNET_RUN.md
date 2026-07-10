@@ -12,6 +12,8 @@
 | **lutinayi 优化版自测** | 仓库 `scnet_start_optimized.sh` → `launch.sh` | 8001 |
 | **正式评测得分** | 竞赛平台提交 `lutinayi_branch`，跑 `launch.sh` | 平台定 |
 
+**禁止再建议或执行 baseline `start_vllm.sh` 自测**（用户只测 `lutinayi_branch` 优化版）。
+
 **baseline 不需要 GitLab 代码。优化版才需要 clone 仓库。**
 
 ---

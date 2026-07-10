@@ -107,28 +107,21 @@ class DCUAttentionBackend:
         max_context_len: int = 0,
         alibi_slopes=None,
     ) -> torch.Tensor:
-<<<<<<< HEAD
-        """HIP path — falls back to GQA PyTorch until kernel is validated on DCU."""
-        if self._kernel_module is None:
-            return self._forward_torch(query, key, value)
-        try:
-            # Kernel API will be wired after SCNet validation
-            return self._forward_torch(query, key, value)
-        except Exception:
-            return self._forward_torch(query, key, value)
-=======
-        if self.kernel_loaded:
-            return self._forward_hip(query, key, value)
+        """HIP path — falls back to PyTorch until kernel is validated on DCU."""
+        if getattr(self, "kernel_loaded", False) and self._kernel_lib is not None:
+            try:
+                return self._forward_hip(query, key, value)
+            except Exception:
+                return self._forward_torch(query, key, value)
         return self._forward_torch(query, key, value)
 
     def _forward_hip(self, query, key, value) -> torch.Tensor:
-        """通过 ctypes host wrapper 调用 HIP kernel。"""
+        """通过 ctypes host wrapper 调用 HIP kernel（需已 load .so）。"""
+        import ctypes
+
         num_tokens = query.shape[0]
         output = torch.empty_like(query)
-
-        # 获取当前 CUDA/HIP stream
         stream = torch.cuda.current_stream().cuda_stream
-
         ret = self._kernel_lib.dcu_flash_attn_forward(
             query.data_ptr(),
             key.data_ptr(),
@@ -141,11 +134,8 @@ class DCUAttentionBackend:
             ctypes.c_int(self.head_dim),
             ctypes.c_void_p(stream),
         )
->>>>>>> 47eb201a21f0eb422c50c45ccf05692b555313c7
-
         if ret != 0:
             raise RuntimeError(f"[DCUAttn] HIP kernel returned error code {ret}")
-
         torch.cuda.synchronize()
         return output
 

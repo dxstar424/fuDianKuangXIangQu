@@ -17,8 +17,8 @@ _check() {
     fi
 }
 
-_check "launch.sh: gpu 0.94" \
-    grep -q 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"' "$PROJ_DIR/launch.sh"
+_check "launch.sh: gpu 0.95" \
+    grep -q 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"' "$PROJ_DIR/launch.sh"
 
 _check "launch.sh: prefix caching" \
     grep -q 'enable-prefix-caching' "$PROJ_DIR/launch.sh"

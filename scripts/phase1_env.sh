@@ -5,7 +5,7 @@
 export FDU_PHASE="${FDU_PHASE:-1}"
 
 # ── 1.1 显存利用率 ──
-export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"
+export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 
 # ── 1.2 分档 warmup ──
 export DO_WARMUP="${DO_WARMUP:-1}"

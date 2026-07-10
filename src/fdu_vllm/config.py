@@ -31,7 +31,7 @@ class FduConfig:
     enable_prefix_cache: bool = True
     enable_hip_graph: bool = False
     enable_gqa_opt: bool = False
-    gpu_memory_utilization: float = 0.94
+    gpu_memory_utilization: float = 0.95
     defrag_threshold: float = 0.7
     kv_quant_dtype: str = "fp8"
     raw: dict = field(default_factory=dict)
@@ -85,7 +85,7 @@ class FduConfig:
             enable_hip_graph=_bool("FDU_ENABLE_HIP_GRAPH", exe.get("use_cuda_graph", False)),
             enable_gqa_opt=_bool("FDU_ENABLE_GQA_OPT", _phase_default(False, True)),
             gpu_memory_utilization=float(
-                os.environ.get("GPU_MEMORY_UTILIZATION", kv.get("gpu_memory_utilization", 0.94))
+                os.environ.get("GPU_MEMORY_UTILIZATION", kv.get("gpu_memory_utilization", 0.95))
             ),
             defrag_threshold=float(kv.get("defrag_threshold", 0.7)),
             kv_quant_dtype=kv.get("kv_quant_dtype", "fp8"),

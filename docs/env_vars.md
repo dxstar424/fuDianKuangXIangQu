@@ -24,7 +24,7 @@
 |--------|------|------|----------|
 | `MODEL_PATH` | 自动：`/root`→`/data`→`$HOME` | 模型路径 | SCNet PDF：`/root` 加载更快 |
 | `PORT` | `8000` | 服务端口 | 评测机默认 |
-| `GPU_MEMORY_UTILIZATION` | `0.94` | 显存利用率 | 相对 stock 0.92；长档 KV 更充裕 |
+| `GPU_MEMORY_UTILIZATION` | `0.95` | 显存利用率 | 相对 stock 0.92；OOM 回退 0.94 |
 | `DO_WARMUP` | `1` | 启动后分档 warmup | 稳 TTFT P99，防 SLA 熔断 |
 | `WARMUP_ROUNDS` | `1` | warmup 轮数 | 评测机可接受启动耗时 |
 | `WARMUP_TIER` | `all` | `all` 时 **先 8–16K** | 主攻 50% 权重档 |

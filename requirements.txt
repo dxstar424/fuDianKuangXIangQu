@@ -1,14 +1,4 @@
 # FDU SCCSCC26 - 额外 Python 依赖
-<<<<<<< HEAD
-
-=======
-# 基础包（PyTorch / vLLM / transformers / ROCm SMI）由官方镜像提供
-# 此处仅列编译和实验中需要的额外依赖
-
-# 数值计算（评测、量化）
-numpy>=1.26.0
-
-# 实验管理与配置解析
->>>>>>> 47eb201a21f0eb422c50c45ccf05692b555313c7
+# 基础包（PyTorch / vLLM / transformers / ROCm）由官方镜像提供
 pyyaml>=6.0
 numpy>=1.26.0

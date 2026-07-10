@@ -1,5 +1,13 @@
 # 变更日志
 
+## [v0.2.12] - 2026-07-10
+
+### 高性价比加固 + 合并冲突清理
+- **修复** `launch.sh` / `config.yaml` / `report.md` / `Dockerfile` / `README.md` / `requirements.txt` / `dcu_attention.py` 中误提交的 `<<<<<<<` 冲突标记（否则评测无法启动）
+- `GPU_MEMORY_UTILIZATION` 默认 **0.94 → 0.95**（相对 stock 0.92）；OOM 回退链 0.94→0.93→0.92
+- 明确不传 `--enforce-eager`，保留 vLLM 原生 CUDAGraph/HIP Graph（减 decode launch）
+- 同步 `easy_scoring.md` / `env_vars.md` / `parameter_tuning.md` / `report.md` / `phase1.py`
+
 ## [v0.2.11] - 2026-07-10
 
 ### SCNet GitLab 权限排查工具链

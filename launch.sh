@@ -1,10 +1,9 @@
 #!/usr/bin/env bash
 # ============================================================
-<<<<<<< HEAD
 # 评测启动脚本 — Phase 1 最有把握提分项（合规 · 默认开启）
 #
 # 相对 stock baseline（gpu=0.92、无 warmup、无 prefix、有日志）：
-#   1.1 GPU_MEMORY_UTILIZATION=0.94     → 长档 KV 池更大（8-16K / 16-32K）
+#   1.1 GPU_MEMORY_UTILIZATION=0.95     → 长档 KV 池更大（8-16K / 16-32K）
 #   1.2 分档 warmup（主攻档优先）       → 稳 TTFT P99，防 SLA 熔断
 #   1.3 --enable-prefix-caching        → 共享前缀降 TTFT
 #   1.4 --disable-log-requests/stats   → 减 Python I/O
@@ -12,7 +11,8 @@
 #   1.6 FDU_ENABLE_KV_QUANT=0          → 保精度系数 1.0
 #   1.7 --dtype bfloat16 + 合规接口    → 与官方权重一致
 #
-# 禁止：改 max-num-seqs / max-num-batched-tokens / batch scheduler
+# 禁止改动（赛题锁定）：max-model-len / max-num-seqs /
+#   max-num-batched-tokens / batch scheduler / temperature / max_tokens
 # 文档：docs/easy_scoring.md · docs/deep_optimization_guide.md §三
 # ============================================================
 set -euo pipefail
@@ -48,7 +48,8 @@ MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-256}"
 
 # ── Phase 1 默认（可由环境覆盖；一次只改一个做 A/B）──
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"
+# 0.95：相对 0.94 再挤一点 KV 池；OOM 时回退 GPU_MEMORY_UTILIZATION=0.94
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-1}"
 DO_WARMUP="${DO_WARMUP:-1}"
 WARMUP_ROUNDS="${WARMUP_ROUNDS:-1}"
@@ -61,6 +62,7 @@ export FDU_ENABLE_KV_QUANT="${FDU_ENABLE_KV_QUANT:-0}"
 export FDU_ENABLE_PREFIX_CACHE="${FDU_ENABLE_PREFIX_CACHE:-1}"
 export FDU_PHASE="${FDU_PHASE:-1}"
 
+# 不传 --enforce-eager：保留 vLLM 默认 CUDAGraph/HIP Graph（并发=1 decode 减 launch）
 VLLM_ARGS=(
     --model "${MODEL_PATH}"
     --port "${PORT}"
@@ -90,6 +92,7 @@ _log_phase1_config() {
     echo "[launch]   1.5 ROCm: HIP_VISIBLE_DEVICES=${HIP_VISIBLE_DEVICES:-?} HSA_ENABLE_SDMA=${HSA_ENABLE_SDMA:-?}"
     echo "[launch]   1.6 FDU_ENABLE_KV_QUANT=${FDU_ENABLE_KV_QUANT}"
     echo "[launch]   1.7 dtype=bfloat16 served=Qwen3.5-27B max_model_len=${MAX_MODEL_LEN}"
+    echo "[launch]   graph: default ON (no --enforce-eager)"
     echo "[launch]   locked: max-num-seqs=${MAX_NUM_SEQS} (unchanged vs stock)"
     echo "[launch] ========================================================"
 }
@@ -147,50 +150,3 @@ echo "[launch] serving (pid=${SERVER_PID})"
 # 评测机需要前台进程；去掉 trap 以免 wait 后误杀
 trap - EXIT
 wait "${SERVER_PID}"
-=======
-# FDU SCCSCC26 — vLLM 推理服务启动脚本（提交入口）
-# 平台调用: bash launch.sh --model /data/Qwen3.5-27B --port 8000 [--tensor-parallel-size N]
-#
-# 本脚本 = 官方 start_vllm.sh 锁定命令的可参数化版本。
-# 锁定参数（不得改动，须与评测命令一致）:
-#   dtype / max-num-seqs / max-num-batched-tokens / gpu-memory-utilization /
-#   enable_thinking / reasoning-parser / served-model-name。
-#
-# 优化 flag 在本地验证通过（吞吐↑ 且 SLA 达标 且 精度 Δ≤1%）后，
-# 才追加到命令末尾（见文末占位）。
-# ============================================================
-set -u
-set -o pipefail
-
-MODEL_DIR="/data/Qwen3.5-27B"
-PORT=8000
-TP=1
-EXTRA=()
-
-while [[ $# -gt 0 ]]; do
-    case "$1" in
-        --model)                 MODEL_DIR="$2"; shift 2 ;;
-        --port)                  PORT="$2";      shift 2 ;;
-        --tensor-parallel-size)  TP="$2";        shift 2 ;;
-        *)                       EXTRA+=("$1");  shift ;;
-    esac
-done
-
-# --- 官方锁定命令 ---
-# 优化 flag 验证通过后，在下面追加对应行，例如：
-#     --kv-cache-dtype fp8 \
-exec vllm serve "$MODEL_DIR" \
-    --served-model-name Qwen3.5-27B \
-    --port "$PORT" \
-    --trust-remote-code \
-    --dtype bfloat16 \
-    --tensor-parallel-size "$TP" \
-    --max-num-seqs 128 \
-    --max-num-batched-tokens 4096 \
-    --gpu-memory-utilization 0.95 \
-    --default-chat-template-kwargs '{"enable_thinking": false}' \
-    --reasoning-parser qwen3 \
-    --enable-auto-tool-choice \
-    --tool-call-parser qwen3_coder \
-    ${EXTRA[@]+"${EXTRA[@]}"}
->>>>>>> 47eb201a21f0eb422c50c45ccf05692b555313c7

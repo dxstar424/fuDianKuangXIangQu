@@ -23,7 +23,7 @@
 
 | 参数 | 默认值 | 作用 | 调大/开 | 调小/关 | 风险 |
 |------|--------|------|---------|---------|------|
-| `GPU_MEMORY_UTILIZATION` | `0.94` | vLLM KV 池占 GPU 显存比例 | 长档 KV 更多，吞吐↑ | OOM 风险↓ | >0.95 易 OOM；<0.92 长档吞吐掉 |
+| `GPU_MEMORY_UTILIZATION` | `0.95` | vLLM KV 池占 GPU 显存比例 | 长档 KV 更多，吞吐↑ | OOM 风险↓ | ≥0.96 易 OOM；OOM 回退 0.94 |
 | `DO_WARMUP` | `1` | 启动后分档 dummy 推理 | TTFT P99 更稳 | 启动快 | 关可能导致首条 SLA 熔断 |
 | `WARMUP_ROUNDS` | `1` | warmup 轮数 | TTFT 更稳 | 启动更快 | 多轮启动慢数分钟 |
 | `WARMUP_TIER` | `all` | 预热档位 | 全档 TTFT 稳 | 只预热指定档 | 未预热档首条可能尖刺 |
@@ -67,7 +67,7 @@
 
 ```
 【最有把握 · Phase 1 默认已开，一般只做 A/B】
-1. GPU_MEMORY_UTILIZATION  0.92 → 0.93 → 0.94（OOM 则回退）
+1. GPU_MEMORY_UTILIZATION  默认 0.95；OOM → 0.94 → 0.93 → 0.92
 2. 确认 warmup + prefix 生效（看 launch 日志「Phase 1 sure-win」）
 3. 关/开 ENABLE_PREFIX_CACHING 做一次 A/B（盲测收益）
 

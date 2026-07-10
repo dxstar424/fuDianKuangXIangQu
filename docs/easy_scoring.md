@@ -14,7 +14,7 @@
 
 | # | 优化项 | stock baseline | 我们的默认 | 主攻指标 | 把握 |
 |---|--------|----------------|------------|----------|------|
-| 1.1 | 显存利用率 | `0.92` | **`0.94`** | 8–16K / 16–32K 吞吐 | ★★★★★ |
+| 1.1 | 显存利用率 | `0.92` | **`0.95`** | 8–16K / 16–32K 吞吐 | ★★★★★ |
 | 1.2 | 分档 warmup | 无 | **开**（先 8–16K） | 全档 TTFT P99 | ★★★★★ |
 | 1.3 | Prefix caching | 关 | **开** | TTFT | ★★★★☆ |
 | 1.4 | 关请求/统计日志 | 开日志 | **关** | 微降 TPOT | ★★★★☆ |
@@ -32,7 +32,7 @@
 launch.sh
  ├─ source scripts/rocm_env.sh → phase1_env.sh   # 1.5 + Phase 门控
  ├─ MODEL_PATH: /root → /data → $HOME            # Prefill 加载加速
- ├─ --gpu-memory-utilization 0.94                # 1.1
+ ├─ --gpu-memory-utilization 0.95                # 1.1（OOM → 0.94）
  ├─ --enable-prefix-caching                      # 1.3
  ├─ --disable-log-requests --disable-log-stats   # 1.4
  ├─ --dtype bfloat16 --served-model-name ...     # 1.7
@@ -50,7 +50,7 @@ launch.sh
 2. **不碰红线参数** → 不会因违规零分。  
 3. **相对 stock 增量清晰** → 可写进 `report.md` 量化贡献。  
 4. **平台已有先例**（富贵花开 84.74，SLA/精度扣分=0）说明同类 launch 路径可过评测。  
-5. **OOM 有回退**：`GPU_MEMORY_UTILIZATION` 一次只改 0.01，OOM → 0.93 → 0.92。
+5. **OOM 有回退**：默认 0.95；OOM → `0.94` → `0.93` → `0.92`。
 
 ---
 

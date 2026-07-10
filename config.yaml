@@ -1,5 +1,4 @@
 # ============================================================
-<<<<<<< HEAD
 # FDU SCCSCC26 - 可调参数声明（合规）
 # 禁止修改: max-num-seqs, max-num-batched-tokens, batch scheduler
 # ============================================================
@@ -12,7 +11,7 @@ phase: 1
 kv_cache:
   strategy: "none"                 # Phase 1：不装 defrag 钩子；Phase 2 改 defrag
   block_size: 16
-  gpu_memory_utilization: 0.94     # 相对 stock 0.92；长档 KV 更充裕
+  gpu_memory_utilization: 0.95     # 相对 stock 0.92；OOM → 回退 0.94
   enable_kv_quant: false           # 默认关，保精度系数
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7
@@ -27,41 +26,13 @@ attention:
 # --- 执行路径（不触碰 batch scheduler）---
 executor:
   enable_prefix_caching: true      # Phase 1 必开
-  use_cuda_graph: false            # 默认关；SCNet 稳定性验证后设 FDU_ENABLE_HIP_GRAPH=1
+  use_cuda_graph: false            # 自研 HIP Graph 钩子默认关；vLLM 原生 graph 不传 --enforce-eager
   cuda_graph_max_bs: 1             # 并发=1
 
 # --- 精度门禁 ---
 precision:
   enforce_accuracy_check: true
-  accuracy_tolerance: 0.01        # Δ ≤ 1%
+  accuracy_tolerance: 0.01         # Δ ≤ 1%
 
 # --- 已弃用（赛题禁止改 batch scheduler，并发=1 无收益）---
 # scheduler: 见 src/scheduler/custom_scheduler.py（仅参考，不启用）
-=======
-# FDU SCCSCC26 — 可调参数声明
-# 当前方案为 L1（仅 vLLM 启动参数，无源码改动 / 无 HIP kernel）。
-# 锁定参数与官方 start_vllm.sh 一致，不可调整；仅 optimization 段可调。
-# ============================================================
-
-# --- 官方锁定参数（与评测命令一致，不得修改）---
-locked:
-  dtype: bfloat16
-  tensor_parallel_size: 1
-  max_num_seqs: 128
-  max_num_batched_tokens: 4096
-  gpu_memory_utilization: 0.95
-  served_model_name: Qwen3.5-27B
-  enable_thinking: false          # --default-chat-template-kwargs
-  reasoning_parser: qwen3
-  tool_call_parser: qwen3_coder
-  # 采样参数由评测客户端强制指定并锁定: temperature=0, max_tokens=1024
-
-# --- 优化项（合规、可调；逐项本地验证后再在 launch.sh 启用）---
-optimization:
-  kv_cache_dtype: auto            # auto(=bf16) | fp8 | fp8_e4m3 | fp8_e5m2
-                                  # 实验 A：验证 吞吐↑ 且 精度 Δ≤1% 后改为 fp8
-
-# --- 精度闸门（用于自查，非启动参数）---
-precision:
-  accuracy_tolerance: 0.01        # 四任务相对基线跌幅 Δ ≤ 1% → 精度系数 1.0
->>>>>>> 47eb201a21f0eb422c50c45ccf05692b555313c7
