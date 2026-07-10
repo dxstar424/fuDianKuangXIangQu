@@ -15,15 +15,15 @@ server:
 
 # 以下为优化版对比预留（Baseline 全部使用默认值）
 attention:
-  backend: "vllm_default"        # ← 默认 FlashAttention
+  backend: "vllm_default"
 
 scheduler:
-  policy: "fcfs"                 # ← 默认 FCFS
-  max_num_batched_tokens: null   # ← 默认自动
+  policy: "fcfs"
+  max_num_batched_tokens: null
 
 kv_cache:
-  block_size: 16                 # ← 默认 16 tokens/block
-  enable_prefix_caching: false   # ← 默认关闭
+  block_size: 16
+  enable_prefix_caching: false
 
 precision:
-  quantization: null             # ← 无量化
+  quantization: null

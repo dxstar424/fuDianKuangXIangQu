@@ -10,6 +10,7 @@
 
 | 文档                                                                 | 用途                   |
 | ------------------------------------------------------------------ | -------------------- |
+| [**reading_guide.md**](./reading_guide.md)                         | **代码阅读学习指南（零基础通读仓库）** |
 | [**deep_optimization_guide.md**](./deep_optimization_guide.md)     | **必须 vs 冲刺 · 深度提分总指南** |
 | [easy_scoring.md](./easy_scoring.md)                               | P0/P1/P2 短期改动清单      |
 | [../report.md](../report.md)                                       | 官方提交用优化方案说明          |

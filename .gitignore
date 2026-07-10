@@ -7,3 +7,5 @@ results/
 .venv/
 venv/
 .env
+AGENTS.md
+CLAUDE.md

@@ -92,6 +92,7 @@ python scripts/compare.py results/baseline_xxx.json results/optimized_xxx.json
 
 ## 评测体系
 
+<<<<<<< HEAD
 
 | 负载档位   | 上下文长度         | 并发数 | 权重  | 场景          |
 | ------ | ------------- | --- | --- | ----------- |
@@ -101,6 +102,13 @@ python scripts/compare.py results/baseline_xxx.json results/optimized_xxx.json
 
 
 
+=======
+| 负载档位 | 上下文长度    | 并发数 | 权重 | 场景                |
+| -------- | ------------- | ------ | ---- | ------------------- |
+| short    | ~512 tokens   | 8      | 20%  | 对话 / 简单问答     |
+| medium   | ~4096 tokens  | 32     | 50%  | 代码生成 / 文档摘要 |
+| long     | ~16384 tokens | 8      | 30%  | 长文档理解          |
+>>>>>>> 47eb201a21f0eb422c50c45ccf05692b555313c7
 
 ### SLA 硬性约束（违反则该档吞吐量得分清零）
 
@@ -145,6 +153,7 @@ python scripts/compare.py results/baseline_xxx.json results/optimized_xxx.json
 
 ## 竞赛约束
 
+<<<<<<< HEAD
 
 | ✅ 允许                | ❌ 禁止           |
 | ------------------- | -------------- |
@@ -160,6 +169,15 @@ python scripts/compare.py results/baseline_xxx.json results/optimized_xxx.json
 ## 团队成员
 
 - 复旦大学 — 待补充
+=======
+| ✅ 允许                       | ❌ 禁止                      |
+| ----------------------------- | ---------------------------- |
+| 推理过程中的算子级低精度计算  | 修改模型结构、权重或推理语义 |
+| KV Cache 在线量化（非持久化） | 持久化量化、剪枝、蒸馏、微调 |
+| 自定义 HIP kernel             | 预缓存答案、截断输入、跳层   |
+| vLLM 插件 / 调度器定制        | 外挂辅助模型（含投机采样）   |
+| 环境变量自定义                | 评测期间下载外部依赖         |
+>>>>>>> 47eb201a21f0eb422c50c45ccf05692b555313c7
 
 
 
