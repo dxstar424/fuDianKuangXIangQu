@@ -11,7 +11,7 @@ phase: 1
 kv_cache:
   strategy: "none"                 # 保持 none；defrag 未接线勿开
   block_size: 16
-  gpu_memory_utilization: 0.94     # 7/10 用 0.95 导致 16-32K 负优化；恢复 0.94
+  gpu_memory_utilization: 0.92     # v0.2.16：降至 stock 基线值，优先 16-32K 纠负
   enable_kv_quant: false           # 默认关，保精度系数
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7
