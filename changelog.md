@@ -1,5 +1,13 @@
 # 变更日志
 
+## [v0.2.10] - 2026-07-10
+
+### 双通道评测工作流（官方无 log + SCNet 无 git）
+- 新增 `scripts/platform_build.sh`：镜像评测机编译，log 写入 `results/platform_build_*.log`
+- 新增 `scripts/scnet_import_repo.sh`：zip 导入仓库，绕过 GitLab 403
+- 新增 `docs/dual_eval_workflow.md`：平台提交 vs SCNet 调试分工说明
+- `scnet_resume.sh` 增加 `import` / `platform-build` 子命令
+
 ## [v0.2.9] - 2026-07-10
 
 ### 平台编译修复（vLLM build failed）

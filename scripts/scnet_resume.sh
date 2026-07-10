@@ -10,6 +10,8 @@
 #   bash scripts/scnet_resume.sh optimized    # lutinayi Phase 1 (launch.sh)
 #   bash scripts/scnet_resume.sh smoke        # 仅冒烟（服务已起）
 #   bash scripts/scnet_resume.sh bench 8-16K  # 冒烟 + 单档吞吐 x10
+#   bash scripts/scnet_resume.sh import /path/to/main.zip   # 无 git 权限时导入
+#   bash scripts/scnet_resume.sh platform-build             # 镜像官方编译 + log
 set -euo pipefail
 
 SCNET_HOME="${SCNET_HOME:-/public/home/xdzs2026_c415}"
@@ -133,8 +135,19 @@ case "$MODE" in
     echo "  baseline:   cd $TESTDATA && MODEL_DIR=$MODEL_ROOT ./start_vllm.sh"
     echo "  optimized:  bash $PROJ/scripts/scnet_start_optimized.sh"
     ;;
+  import)
+    zip="${2:?Usage: scnet_resume.sh import /path/to/main.zip}"
+    bash "$SCRIPT_DIR/scnet_import_repo.sh" "$zip"
+    ;;
+  platform-build|platform)
+    if [[ ! -f "$PROJ/scripts/platform_build.sh" ]]; then
+        echo "ERROR: 先 import zip 或 clone 仓库到 $PROJ" >&2
+        exit 1
+    fi
+    bash "$PROJ/scripts/platform_build.sh"
+    ;;
   *)
-    echo "Usage: scnet_resume.sh [baseline|optimized|smoke|bench <tier>|prereq]"
+    echo "Usage: scnet_resume.sh [baseline|optimized|smoke|bench <tier>|prereq|import <zip>|platform-build]"
     exit 1
     ;;
 esac
