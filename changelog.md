@@ -1,5 +1,12 @@
 # 变更日志
 
+## [v0.2.8] - 2026-07-10
+
+### 平台提交修复（vLLM 源码 vendor 到根目录）
+- 根目录合入官方 `vllm_cscc` v0.18.1 的 `setup.py`、`vllm/`、`cmake/`、`csrc/` 等编译必需文件
+- `fdu_vllm` 插件注册到 `vllm/__init__.py`；`prepare_submit.sh` 改为铺平到仓库根
+- **注意**：竞赛平台默认拉取 **`main`** 分支，须同步 push 到 main 后再提交
+
 ## [v0.2.7] - 2026-07-10
 
 ### 平台提交修复（missing setup.py）

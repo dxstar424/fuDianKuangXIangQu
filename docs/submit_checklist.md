@@ -1,8 +1,9 @@
 # 官方平台提交检查清单（Phase 6）
 
 ## 代码
-- [ ] **仓库根目录存在 `setup.py`**（评测机检查 `/coursegrader/submit/setup.py`）
-- [ ] 离线编译：在 SCNet 执行 `bash scripts/prepare_submit.sh` 后 `git add vllm_cscc/` 并 push
+- [ ] **仓库根目录存在真实 vLLM 源码**：`setup.py` + `vllm/`（评测机检查 `/coursegrader/submit/setup.py`）
+- [ ] 在 SCNet 执行 `bash scripts/prepare_submit.sh` 后 commit + push（首次 vendor 或更新补丁后）
+- [ ] **平台默认拉 `main` 分支**；若提交 `lutinayi_branch` 须在平台/GitLab 绑定对应分支
 - [ ] `bash scripts/compile_vllm.sh` 在 SCNet/评测容器编译通过
 - [ ] `bash launch.sh` 启动成功，curl 推理正常
 - [ ] `bash scripts/gate_check.sh full` 通过（Δ≤1%）
