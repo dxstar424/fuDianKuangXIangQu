@@ -15,7 +15,8 @@
 
 ## GitLab
 - [ ] push 到 `gitlab.eduxiji.net/fudiankuangxiangqu/2025pra-fdu-fudiankuangxiangqu`
-- [ ] 竞赛平台触发评测，查看编译 log
+- [ ] 竞赛平台触发评测（**富贵花开** 账号，分支 **`main`**）
+- [ ] 平台仅显示 build failed 时 → SCNet 跑 `bash scripts/platform_build.sh` 拿 log（见 [dual_eval_workflow.md](./dual_eval_workflow.md)）
 
 ## 分支建议
 - `baseline-test`：stock launch 验证流水线
