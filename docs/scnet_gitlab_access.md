@@ -12,15 +12,57 @@
 | **1** | `Could not resolve host: gitlab.eduxiji.net` | **容器 DNS 不解析校外域名** | `getent hosts gitlab.eduxiji.net` 失败 | `/etc/hosts` 或 `--resolve`（见下） |
 | **2** | URL 变成 `gitlab.eduxiji.ne` | **复制粘贴截断** | 检查命令里域名是否完整 `.net` | 用变量 `U="https://..."` 再 `curl "$U"` |
 | **3** | `HTTP 302` → `sign_in` / `401` / `403` | **仓库私有，匿名无 read** | 诊断 §3 ZIP 返回登录页 | **Deploy Token** 或 **ZIP 网页下载上传** |
-| **4** | `403` + `Connection established` + proxy | **http_proxy 劫持 Git 鉴权** | `env \| grep -i proxy` | `unset` 全部 proxy 再 git/curl |
-| **5** | `403` 无 proxy | **Token 错 / 过期 / 无项目权限** | 用 token 仍 403 | Owner 加成员或新建 Deploy Token |
-| **6** | `Connection timed out` | **容器出网封禁教育网 GitLab** | `nc 111.6.188.181 443` 失败 | **只能 ZIP 上传**，放弃 curl/git |
+| **4** | hosts 已加仍 `curl: (28) Timeout` | **NO_PROXY 含 gitlab → 强制直连外网被封** | `env \| grep NO_PROXY` 含 eduxiji | **走集群代理**（见下） |
+| **5** | `403` + proxy 环境变量 | 代理未用于 https / NO_PROXY 误配 | 对比直连 vs 代理 curl | `scnet_gitlab_via_proxy.sh` |
+| **6** | `403` 无 proxy、代理也通 | **Token 错 / 过期 / 无项目权限** | 用 token 仍 403 | Owner 加成员或 Deploy Token |
+| **7** | 代理 curl 也 timeout | **出网封禁教育网 GitLab** | `via_proxy test` 仍 28 | **只能 ZIP 上传** |
 | **7** | `SSL certificate problem` | 容器 CA 不全 | curl 报 cert | `GIT_SSL_NO_VERIFY=true`（仅调试，不推荐长期） |
 | **8** | git 403 但 curl IP 通 | **git 走 proxy、cURL 不走** | 对比 §4/§5 | 统一 `unset proxy` + `git -c http.proxy=` |
 | **9** | 竞赛平台能拉、SCNet 不能 | **两环境网络策略不同** | 平台有内网镜像 | SCNet 用 ZIP，不依赖 GitLab |
 | **10** | `git clone` 成功无 `setup.py` | **分支错 / 旧 commit** | `git log -1` | 换 `main` 或 `lutinayi_branch` 最新 |
 
-**你当前日志**（`Could not resolve host: gitlab.eduxiji.ne`）→ 优先查 **#1 DNS** + **#2 截断**。
+**你当前日志**（DNS FAIL + hosts 后 **curl 28 Timeout** + `NO_PROXY=gitlab.eduxiji.net`）→ **#1 DNS** + **#4 强制直连被封**；下一步走 **集群代理**（`scnet_gitlab_via_proxy.sh`），不行再 **ZIP 上传**。
+
+---
+
+## 你的环境已定位（2026-07-10 诊断）
+
+| 检查项 | 结果 | 含义 |
+|--------|------|------|
+| DNS `11.13.20.240` | 不解析 gitlab | 需 `/etc/hosts` |
+| hosts 修复后 | 能解析 | DNS 层 OK |
+| 直连 `111.6.188.181:443` | **15s 超时** | 容器**禁止直连外网** GitLab |
+| `NO_PROXY=gitlab.eduxiji.net` | 已设置 | curl **故意不走代理** → 必超时 |
+| `ftp_proxy=...@10.16.1.51:3128` | 存在 | 应让 **https** 也走该代理 |
+
+### 立即在 SCNet 试（走代理）
+
+```bash
+export http_proxy=http://preset:6e298f07@10.16.1.51:3128
+export https_proxy=$http_proxy
+export no_proxy=localhost,127.0.0.1,.zzai2.scnet.cn,zzai2.scnet.cn
+unset NO_PROXY
+
+getent hosts gitlab.eduxiji.net || echo '111.6.188.181 gitlab.eduxiji.net' | sudo tee -a /etc/hosts
+
+curl -sSI -m 45 https://gitlab.eduxiji.net/ | head -8
+```
+
+若返回 `302`/`200`（不是 28 Timeout）→ 网络通了，再带 Token 下载：
+
+```bash
+export GITLAB_TOKEN='你的glpat-xxx'   # GitLab 登录 → Settings → Access Tokens → read_repository
+
+curl -fL -m 300 -H "PRIVATE-TOKEN: $GITLAB_TOKEN" -o lutinayi.zip \
+  "https://gitlab.eduxiji.net/fudiankuangxiangqu/2025pra-fdu-fudiankuangxiangqu/-/archive/lutinayi_branch/2025pra-fdu-fudiankuangxiangqu-lutinayi_branch.zip"
+
+ls -lh lutinayi.zip
+unzip -qo lutinayi.zip
+mv 2025pra-fdu-fudiankuangxiangqu-lutinayi_branch 2025pra-fdu-fudiankuangxiangqu
+cd 2025pra-fdu-fudiankuangxiangqu && bash scripts/platform_build.sh
+```
+
+若走代理仍 **Timeout** → 只能 **Windows 下载 ZIP → SCNet 网页/rz 上传**（与 GitLab 网络彻底隔离）。
 
 ---
 

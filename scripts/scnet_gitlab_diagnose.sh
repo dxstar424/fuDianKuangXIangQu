@@ -44,10 +44,25 @@ else
 fi
 cat /etc/resolv.conf 2>/dev/null | head -6 || warn "无 resolv.conf"
 
+section "2b. 代理陷阱（NO_PROXY 含 GitLab → 直连超时）"
+if env | grep -iE '^NO_PROXY=.*eduxiji|^no_proxy=.*eduxiji' >/dev/null 2>&1; then
+  fail "NO_PROXY/no_proxy 含 eduxiji，curl/git 会绕过集群代理直连外网（易超时）"
+  env | grep -iE '^NO_PROXY=|^no_proxy=|^https_proxy=|^http_proxy=|^ftp_proxy='
+else
+  info "NO_PROXY 未单独排除 GitLab"
+fi
+PROXY_URL="${SCNET_HTTPS_PROXY:-${https_proxy:-${HTTPS_PROXY:-http://preset:6e298f07@10.16.1.51:3128}}}"
+info "集群代理候选: $PROXY_URL"
+
 section "2. TCP 连通 (443)"
 if command -v curl >/dev/null 2>&1; then
   curl -sS -m 10 -o /dev/null -w "curl_host code=%{http_code} time=%{time_total}s\n" "https://${GITLAB_HOST}/" || fail "curl 域名 HTTPS"
   curl -sS -m 10 -o /dev/null -w "curl_ip   code=%{http_code} time=%{time_total}s\n" --resolve "${GITLAB_HOST}:443:${GITLAB_IP}" "https://${GITLAB_HOST}/" || fail "curl --resolve IP HTTPS"
+  info "curl 经集群代理（应优先于直连）"
+  curl -sS -m 30 -o /dev/null -w "curl_proxy code=%{http_code} time=%{time_total}s\n" \
+    -x "$PROXY_URL" \
+    --proxy-insecure \
+    "https://${GITLAB_HOST}/" || fail "curl -x proxy HTTPS"
 else
   fail "无 curl"
 fi
