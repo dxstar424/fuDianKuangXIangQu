@@ -1,57 +1,126 @@
 # 变更日志
 
-> 格式：每条记录 **改动 → 预期效果 → 实测结果**（大赛提交强制要求，评委据此判断系统性探索 vs 随机试参）。
-> 评测口径：初赛**并发固定为 1**、temperature=0、每条输出 1024 token，输入分 4-8K / 8-16K / 16-32K 三档（权重 20% / 50% / 30%）。
-> 判分：吞吐相对官方 baseline 的提升；SLA 硬闸门 TTFT P99 与 TPOT P99 均 ≤ baseline×1.5，超则该档清零；精度四任务跌幅 Δ≤1% 系数为 1.0。
+## [v0.2.9] - 2026-07-10
+
+### 平台编译修复（vLLM build failed）
+- 补全 vendor 遗漏的 `requirements/`（`setup.py` 的 `get_requirements()` 依赖）与 `LICENSE`
+- `setup.py`：ROCm 版本文件缺失时降级警告，避免 `get_version_add` 崩溃
+
+## [v0.2.8] - 2026-07-10
+
+### 平台提交修复（vLLM 源码 vendor 到根目录）
+- 根目录合入官方 `vllm_cscc` v0.18.1 的 `setup.py`、`vllm/`、`cmake/`、`csrc/` 等编译必需文件
+- `fdu_vllm` 插件注册到 `vllm/__init__.py`；`prepare_submit.sh` 改为铺平到仓库根
+- **注意**：竞赛平台默认拉取 **`main`** 分支，须同步 push 到 main 后再提交
+
+## [v0.2.7] - 2026-07-10
+
+### 平台提交修复（missing setup.py）
+- 新增根目录 `setup.py`：克隆/使用 `vllm_cscc/`、应用 FDU 补丁、`bdist_wheel`
+- 新增 `scripts/prepare_submit.sh`：SCNet 上 vendor vllm 源码进仓库（离线评测必需）
+- `launch.sh`：SCNet 家目录模型路径；warmup 失败非致命；健康检查 900s
+- `warmup_server.py`：16-32K warmup 降至 16k tokens，降低 OOM 风险
+- `gate_check.sh` / `scnet_start_optimized.sh` / `scnet_resume.sh`：SCNet 路径解析
+
+## [v0.2.6] - 2026-07-09
+
+### 最有把握提分项加固（Phase 1）
+- 重写 `docs/easy_scoring.md`：相对 stock 的 1.1–1.7 清单 + 代码落点
+- `docs/deep_optimization_guide.md` §三增加「最有把握提分步骤」表
+- `launch.sh`：模型路径 `/root`→`/data` 自动解析；健康检查支持 `/v1/models`；超时 600s
+- `warmup_server.py`：`tier=all` 时 **先 8–16K**；chat 失败回退 completions；缩短 decode
+- `vllm_env.py`：与 `rocm_env.sh` 对齐（SDMA / expandable_segments 等）
+- `config.yaml`：Phase 1 默认 `strategy=none`、`backend=vllm_default`
+- `report.md` / `parameter_tuning.md` / `env_vars.md`：同步最有把握项说明
+
+## [v0.2.5] - 2026-07-09
+
+### Phase 1 代码闭环
+- 新增 `scripts/phase1_env.sh`：1.1–1.7 专用环境，默认关闭 Phase 2+ 钩子
+- 新增 `src/fdu_vllm/phase1.py`：Phase 1 配置校验与日志
+- 新增 `scripts/verify_phase1_config.sh`、`scripts/run_phase1_gate.sh`
+- `hooks.py`：`FDU_PHASE=1` 时仅 launch CLI 优化，不安装 GQA/KV/attention 钩子
+- `config.py`：Phase 1 默认 `kv_quant=false`、`gpu=0.94`、`gqa=false`
+- `launch.sh`：启动时打印 Phase 1 配置摘要
+- `Dockerfile`：写入 Phase 1 默认 ENV
+- 修复 `scnet_setup.sh` testdata 存在性判断
+
+## [v0.2.4] - 2026-07-09
+
+### DCU decode 访存实测解读
+- 新增 `docs/dcu_decode_benchmark_interpretation.md`（gfx936 微基准：权重 IO 95%、双缓冲证伪）
+- 调整 roadmap：HIP Graph↑、GEMV 双缓冲↓、FlashAttn 主攻 prefill/TTFT、KV FP8 预期修正
+
+## [v0.2.3] - 2026-07-09
+
+### 四人分工与协作
+- 新增 `docs/team_division.md`：I 整合/Git、P1 KV/Prefill、P2 Decode、G 门禁/定期评测
+- 新增 `docs/parameter_tuning.md`：参数作用、A/B 表、合并冲突区（整合负责人维护）
+- 新增 `docs/deep_optimization_guide.md`：必须(M0–M3) vs 冲刺(S1–S4) 深度提分指南
+- 更新 `optimization_roadmap.md` §4 分工、赛程负责人、7/13 main 大合并里程碑
+- `easy_scoring.md` / roadmap 增加深度指南入口
+
+## [v0.2.2] - 2026-07-09
+
+### 官方指导对齐
+- 新增 `docs/official_guidance_interpretation.md`（zhaorq 2026-07-09 技术指导解读）
+- 调整 `optimization_roadmap.md`：KV 块/defrag 上调 P1；HIP Graph 提前 P2；KV FP8 融合门禁
+- 更新 `easy_scoring.md`：Prefill/Decode 分阶段优先级 + 提交核对清单
+- 更新 `report.md`：优化贡献量化表 + 合规声明补充
+- `launch.sh`：修复 `FDU_ENABLE_PREFIX_CACHE` 默认值
+
+## [v0.2.1] - 2026-07-08
+
+### 最容易拿分（跑分指南对齐）
+- `launch.sh`：显存 0.94、prefix cache、关闭 log、bf16、KV FP8 默认关
+- `warmup_server.py`：按 4-8K / 8-16K / 16-32K 分档 prefill warmup（稳 TTFT P99）
+- `vllm_env.py`：import 前 ROCm/日志优化
+- `scripts/scnet_start_optimized.sh`：SCNet testdata 端口 8001 一键启动
+- `docs/easy_scoring.md`：提分优先级说明
+
+## [v0.2.0] - 2026-07-08
+
+### 多阶段合规提分方案实施
+
+**Phase 0 — SCNet / Baseline**
+- 新增 `scripts/scnet_setup.sh`：SCNet 一键初始化（vLLM 编译、模型、testdata）
+- 新增 `scripts/record_baseline.sh`：三档吞吐 baseline 记录
+- 新增 `scripts/gate_check.sh`：quick/full 精度性能门禁
+
+**Phase 1 — ROCm / launch**
+- 重写 `launch.sh`：合规参数、warmup、`fdu_vllm.server` 入口
+- 新增 `scripts/rocm_env.sh`、`scripts/compile_vllm.sh`、`scripts/warmup_server.py`
+- 移除 `FDU_SCHEDULER_POLICY`（违规/无收益）
+
+**Phase 2 — vLLM 内置路径**
+- 新增 `src/fdu_vllm/gqa_decode.py`：GQA einsum 路径（64Q/32KV）
+- Prefix caching 通过 `--enable-prefix-caching` 启用
+- KV block/prefix hooks：`fdu_vllm/kv_cache.py`
+
+**Phase 3 — KV FP8**
+- `fdu_vllm/kv_fp8.py`：在线非持久化 FP8
+
+**Phase 4 — HIP attention**
+- `dcu_attention.py`：HIP 失败自动 fallback PyTorch
+- 新增 `scripts/verify_token_consistency.py`
+
+**Phase 5 — HIP Graph**
+- 默认 `FDU_ENABLE_HIP_GRAPH=0`；`fdu_vllm/hip_graph.py` opt-in
+
+**Phase 6 — 工程化**
+- `patches/vllm_cscc/` + `scripts/apply_vllm_patches.sh`
+- 更新 `Dockerfile`、`config.yaml`、`docs/env_vars.md`、`report.md`
 
 ---
 
-## [已放弃] 实验 A：KV Cache FP8 在线量化 — 2026-07-09
+## [v0.1.1] - 2026-07-07
 
 ### 改动
-- `results/sh/start_vllm_fp8.sh`：官方锁定命令 + `--kv-cache-dtype fp8`。
-
-### 预期
-- KV Cache bf16→fp8 减半每 token 读取量 → TPOT↓ → 吞吐↑，16-32K 档收益最大。
-
-### 实测（10 条采样，见 `results/photos/result.md` 第二部分）
-| 档位 | 基线吞吐 | FP8 吞吐 | 基线 TTFT P99 | FP8 TTFT P99 | 基线 TPOT P99 | FP8 TPOT P99 |
-|------|---------|---------|--------------|-------------|--------------|-------------|
-| 4-8K   | 12.21 | **10.65** ▼12.8% | 4546  | **26627** (SLA 爆) | 69.36 | 71.13 |
-| 8-16K  | 7.24  | 7.10  ▼1.9%  | 15644 | 17253              | 70.69 | 73.87 |
-| 16-32K | 3.22  | 2.90  ▼9.9%  | 28708 | 31802              | 73.25 | 76.51 |
-
-精度：hotpotqa 67.71（持平）、gov_report 34.17（↓0.45），retrieval/aggregation 未完成。
-
-### 结论
-**放弃。** 三档吞吐全面倒退，4-8K 档 TTFT P99 从 4.5s 暴涨至 26.6s（×5.9，远超 SLA 上限 1.5×baseline），该档直接判零。
-根因：并发=1 时 KV 总量小，fp8 量化/反量化每步的额外计算开销 > 省下的带宽收益。prefill 阶段大量 KV 写入触发密集 quantize 操作，是 TTFT 爆炸的主因。
-经验：带宽墙场景下，**减少字节数但增加每字节计算量的优化可能适得其反**——必须确认"省的带宽时间 > 多的计算时间"。
+- HIP/ROCm 语义与 profiling 工具链
 
 ---
 
-## [基线] 官方 Baseline 复现 — 2026-07-09
+## [v0.1.0] - 2026-07-06
 
 ### 改动
-- 使用官方 `start_vllm.sh`（stock vLLM 0.18.1，无任何自定义）复现基线，取每档前 10 条。
-
-### 预期
-- 建立对照基准，作为后续所有优化的相对提升起点与 SLA 阈值来源。
-
-### 实测（10 条采样，见 `results/photos/result.md`）
-| 档位 | 输出吞吐 (tok/s) | TTFT P99 (ms) | TPOT P99 (ms) |
-|------|-----------------|---------------|---------------|
-| 4-8K   | 12.21 | 4546.49  | 69.36 |
-| 8-16K  | 7.24  | 15643.63 | 70.69 |
-| 16-32K | 3.22  | 28707.83 | 73.25 |
-
-精度（10 条）：hotpotqa 67.71 · gov_report 34.62 · retrieval_multi_point 100.00 · aggregation_keyword_aggregation 100.00
-
----
-
-## 策略修正说明 — 2026-07-09
-
-放弃早期"高并发大 batch"方向（`--max-num-seqs 256` / `--max-num-batched-tokens 8192` / prefix caching）。
-原因：初赛**并发固定为 1**，批处理类优化无效，且这些参数被评测机锁定。有效方向收敛为单请求长上下文的
-**KV Cache 显存/带宽优化、算子/kernel 优化、执行路径优化**。`src/` 下的 HIP kernel / 自定义调度保留为
-L2/L3 参考实现，尚未接入 vLLM 运行时，非提交必要条件。
+- 项目初始化
