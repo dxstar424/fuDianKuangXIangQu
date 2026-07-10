@@ -3,7 +3,16 @@
 set -euo pipefail
 
 MODE="${1:-quick}"
-TESTDATA="${TESTDATA:-$HOME/testdata}"
+SCNET_HOME="${SCNET_HOME:-/public/home/xdzs2026_c415}"
+if [[ -z "${TESTDATA:-}" ]]; then
+    for cand in "$HOME/testdata" "$SCNET_HOME/testdata"; do
+        if [[ -d "$cand" ]]; then
+            TESTDATA="$cand"
+            break
+        fi
+    done
+    TESTDATA="${TESTDATA:-$HOME/testdata}"
+fi
 HOST="${HOST:-127.0.0.1}"
 PORT="${PORT:-8001}"
 

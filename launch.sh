@@ -26,7 +26,11 @@ _resolve_model_path() {
         echo "${MODEL_PATH}"
         return
     fi
-    for cand in /root/Qwen3.5-27B /data/Qwen3.5-27B "${HOME}/Qwen3.5-27B"; do
+    for cand in \
+        /root/Qwen3.5-27B \
+        /data/Qwen3.5-27B \
+        "${SCNET_HOME:-/public/home/xdzs2026_c415}/Qwen3.5-27B" \
+        "${HOME}/Qwen3.5-27B"; do
         if [[ -d "$cand" ]]; then
             echo "$cand"
             return
@@ -96,7 +100,7 @@ _start_server() {
 }
 
 _wait_healthy() {
-    local deadline="${HEALTH_TIMEOUT:-600}"
+    local deadline="${HEALTH_TIMEOUT:-900}"
     local i=0
     echo "[launch] waiting for health (timeout=${deadline}s) ..."
     while (( i < deadline )); do
@@ -129,11 +133,16 @@ trap 'kill ${SERVER_PID} 2>/dev/null || true' EXIT
 _wait_healthy
 
 echo "[launch] starting tiered warmup (8-16K first when tier=all) ..."
-python "$SCRIPT_DIR/scripts/warmup_server.py" \
+if ! python "$SCRIPT_DIR/scripts/warmup_server.py" \
     --host 127.0.0.1 --port "${PORT}" \
-    --rounds "${WARMUP_ROUNDS}" --tier "${WARMUP_TIER}"
+    --rounds "${WARMUP_ROUNDS}" --tier "${WARMUP_TIER}"; then
+    echo "[launch] WARNING: warmup failed (non-fatal); serving anyway" >&2
+    echo "[launch]   hint: DO_WARMUP=0 to skip, or WARMUP_TIER=8-16K for single tier" >&2
+else
+    echo "[launch] Warmup done"
+fi
 
-echo "[launch] Warmup done; serving (pid=${SERVER_PID})"
+echo "[launch] serving (pid=${SERVER_PID})"
 # 评测机需要前台进程；去掉 trap 以免 wait 后误杀
 trap - EXIT
 wait "${SERVER_PID}"

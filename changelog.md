@@ -1,5 +1,14 @@
 # 变更日志
 
+## [v0.2.7] - 2026-07-10
+
+### 平台提交修复（missing setup.py）
+- 新增根目录 `setup.py`：克隆/使用 `vllm_cscc/`、应用 FDU 补丁、`bdist_wheel`
+- 新增 `scripts/prepare_submit.sh`：SCNet 上 vendor vllm 源码进仓库（离线评测必需）
+- `launch.sh`：SCNet 家目录模型路径；warmup 失败非致命；健康检查 900s
+- `warmup_server.py`：16-32K warmup 降至 16k tokens，降低 OOM 风险
+- `gate_check.sh` / `scnet_start_optimized.sh` / `scnet_resume.sh`：SCNet 路径解析
+
 ## [v0.2.6] - 2026-07-09
 
 ### 最有把握提分项加固（Phase 1）
