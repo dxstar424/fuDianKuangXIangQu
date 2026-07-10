@@ -1,86 +1,48 @@
-# 最有把握提分清单（Phase 1 · 必做）
+# 最有把握提分清单（去掉负优化 · 先超过官方 Baseline）
 
-> **深度指南**：[deep_optimization_guide.md](./deep_optimization_guide.md) §三  
-> **总规划**：[optimization_roadmap.md](./optimization_roadmap.md)  
-> **调参**：[parameter_tuning.md](./parameter_tuning.md)  
+> **冲刺攻略**：[sprint_strategy_0711.md](./sprint_strategy_0711.md)（S1–S4 少次多阶段）  
+> **深度解读**：[scoring_and_results_interpretation.md](./scoring_and_results_interpretation.md)  
 > **分支**：`lutinayi_branch` · 入口：`launch.sh`
 
-本文只列 **一定有把握、低风险、已合入默认提交路径** 的步骤。  
-不做 HIP kernel / KV FP8 / GQA deep hook（那些是 Phase 2+，需门禁后再开）。
-
----
-
-## 相对 stock 改了什么
-
-| # | 优化项 | stock baseline | 我们的默认 | 主攻指标 | 把握 |
-|---|--------|----------------|------------|----------|------|
-| 1.1 | 显存利用率 | `0.92` | **`0.95`** | 8–16K / 16–32K 吞吐 | ★★★★★ |
-| 1.2 | 分档 warmup | 无 | **开**（先 8–16K） | 全档 TTFT P99 | ★★★★★ |
-| 1.3 | Prefix caching | 关 | **开** | TTFT | ★★★★☆ |
-| 1.4 | 关请求/统计日志 | 开日志 | **关** | 微降 TPOT | ★★★★☆ |
-| 1.5 | ROCm/DCU env | 默认 | **SDMA + expandable_segments 等** | Decode 稳定性 | ★★★★☆ |
-| 1.6 | KV 在线量化 | — | **强制关** | 精度系数 = 1.0 | ★★★★★（保分） |
-| 1.7 | dtype / 接口 | bf16 隐式 | **显式 bf16 + 合规 served-name** | 稳定性 | ★★★★★ |
-
-**禁止动**：`max-num-seqs` / `max-num-batched-tokens` / batch scheduler（与 stock 同为 256）。
-
----
-
-## 代码落点（评测机实际跑这些）
+## 先认清事实（2026-07-10 22:14 · 本队 lutinayi_branch）
 
 ```
-launch.sh
- ├─ source scripts/rocm_env.sh → phase1_env.sh   # 1.5 + Phase 门控
- ├─ MODEL_PATH: /root → /data → $HOME            # Prefill 加载加速
- ├─ --gpu-memory-utilization 0.95                # 1.1（OOM → 0.94）
- ├─ --enable-prefix-caching                      # 1.3
- ├─ --disable-log-requests --disable-log-stats   # 1.4
- ├─ --dtype bfloat16 --served-model-name ...     # 1.7
- ├─ python -m fdu_vllm.server                    # vllm_env.py 再设 ROCm/日志
- └─ scripts/warmup_server.py --tier all          # 1.2（8-16K 优先）
+得分 59.97
+吞吐 12.92 / 10.04 / 5.77
+SLA=0 精度=0 → 能跑、未熔断；吞吐接近官方 Baseline（公式上约 60 分）
+16-32K 5.77 < Baseline~7.75 → 该档为负提升
 ```
 
-`FDU_PHASE=1`（默认）：**不**安装 GQA / KV defrag / HIP Graph 钩子，避免未验证路径拖垮 SLA。
+| 对比 | 4–8K | 8–16K | 16–32K | 得分 |
+|------|------|-------|--------|------|
+| **本队 7/10 lutinayi** | 12.92 | 10.04 | 5.77 | **59.97** |
+| 官方 Baseline（估） | ~10.6 | ~9.6 | ~7.8 | **~60** |
+| 榜上他队参考（富贵花开，**非本队**） | 18.37 | 16.65 | 13.49 | 84.74 |
+
+**结论**：本队正式分 ≈「接近官方 Baseline」。排行榜 84 分账号**不是我们的**，不能当「曾经达到过」或回血目标。
 
 ---
 
-## 为什么这些「一定有把握」
+## 当前默认（S1 Recover · 已锁）
 
-1. **不改计算语义** → 精度系数不易掉。  
-2. **不碰红线参数** → 不会因违规零分。  
-3. **相对 stock 增量清晰** → 可写进 `report.md` 量化贡献。  
-4. **平台已有先例**（富贵花开 84.74，SLA/精度扣分=0）说明同类 launch 路径可过评测。  
-5. **OOM 有回退**：默认 0.95；OOM → `0.94` → `0.93` → `0.92`。
+| 项 | 7/10 提交配置 | **现在默认** | 原因 |
+|----|---------------|--------------|------|
+| 入口 | `fdu_vllm.server` | **stock `api_server`** | 去掉未验证插件层 |
+| 显存 | **0.95** | **0.94** | 长档负优化主嫌疑 |
+| warmup | 开（全档） | **关** | 平台评测不依赖长 dummy |
+| Graph | 默认开 | **`--enforce-eager`** | 避 DCU Graph 负优化 |
+| prefix + 关日志 | 开 | **仍开** | 低风险保留 |
 
----
-
-## SCNet 验证顺序（主攻 8–16K）
-
-```bash
-# 0) 静态检查
-bash scripts/verify_phase1_config.sh
-
-# 1) stock 对照（另开终端记 TTFT/TPOT/吞吐）
-cd ~/testdata && ./start_vllm.sh
-./run_throughput.sh 8-16K 20
-
-# 2) Phase 1 优化版
-bash scripts/scnet_start_optimized.sh   # PORT=8001
-cd ~/testdata
-# 对 8001 跑同等吞吐/精度
-bash ~/…/scripts/gate_check.sh quick
-```
-
-门禁：8–16K ≥ stock；TTFT/TPOT P99 ≤ baseline×1.5；精度 Δ≤1%；再平台提交。
+校验：`bash scripts/verify_recover_config.sh`
 
 ---
 
-## 下一步（有把握项跑通之后）
+## 提交顺序（少次多阶段）
 
-| 优先级 | 项 | 条件 |
-|--------|----|------|
-| Phase 2 | KV 块/defrag deep hook、GQA | Phase 1 门禁通过 |
-| Phase 2 | HIP Graph | SCNet 长测稳定 |
-| Phase 3 | 融合 KV FP8 / HIP Attn | 分≥87 或 8–16K 仍差 >2 tok/s |
+1. **S1**：推恢复版 → 目标：**稳定高于官方 Baseline**（总分 ≥65）— 平台 **1 次**
+2. **S2**：`ab_stage2.sh` 对 `ENFORCE_EAGER=0` / 单档 warmup 做 A/B → 平台 **≤1**
+3. **S3**：`stage3_gqa_launch.sh`（GQA 已接线）→ token 一致 + quick → 平台 **≤1**
+4. **S4**：仅 S3 净增后 `stage4_graph_launch.sh`；**禁止**未验证开 0.95 / KV FP8 / defrag
+5. **不要**用他队 84 分当本队历史成绩
 
-详见 [deep_optimization_guide.md](./deep_optimization_guide.md) §四–§五。
+全赛程平台提交约 **≤4 次**。详见 [sprint_strategy_0711.md](./sprint_strategy_0711.md)。

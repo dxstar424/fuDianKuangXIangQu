@@ -12,11 +12,11 @@ export HSA_ENABLE_SDMA="${HSA_ENABLE_SDMA:-1}"
 export PYTORCH_HIP_ALLOC_CONF="${PYTORCH_HIP_ALLOC_CONF:-expandable_segments:True}"
 export HIP_FORCE_DEV_KERNARG="${HIP_FORCE_DEV_KERNARG:-1}"
 
-# Phase 2+ 默认值（仅当 FDU_PHASE>=2 时由 phase1_env 之外的调用方覆盖）
+# Phase 2+ 默认：只开 GQA（已接线）；defrag/FP8/Graph 保持关直至单独门禁
 if [[ "${FDU_PHASE}" != "1" ]]; then
     export FDU_ENABLE="${FDU_ENABLE:-1}"
-    export FDU_KV_CACHE_STRATEGY="${FDU_KV_CACHE_STRATEGY:-defrag}"
-    export FDU_ATTENTION_BACKEND="${FDU_ATTENTION_BACKEND:-dcu_optimized}"
+    export FDU_KV_CACHE_STRATEGY="${FDU_KV_CACHE_STRATEGY:-none}"
+    export FDU_ATTENTION_BACKEND="${FDU_ATTENTION_BACKEND:-vllm_default}"
     export FDU_ENABLE_KV_QUANT="${FDU_ENABLE_KV_QUANT:-0}"
     export FDU_ENABLE_PREFIX_CACHE="${FDU_ENABLE_PREFIX_CACHE:-1}"
     export FDU_ENABLE_HIP_GRAPH="${FDU_ENABLE_HIP_GRAPH:-0}"

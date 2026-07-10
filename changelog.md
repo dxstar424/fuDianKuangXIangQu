@@ -1,5 +1,29 @@
 # 变更日志
 
+## [v0.2.14] - 2026-07-11
+
+### 少次多阶段冲刺落地（S1–S4 + Phase2 三板）
+- 扩充 `docs/sprint_strategy_0711.md`：GQA/defrag/Graph SCNet 协议、一人一块、合 main 规则
+- 新增 `scripts/stage3_defrag_launch.sh`、`scripts/run_phase2_bench.sh`
+- S1：`scripts/verify_recover_config.sh`（锁 0.94/eager/stock/warmup=0）
+- S2：`scripts/ab_stage2.sh`（eager-off / warmup-816 单变量）
+- S3：GQA **真实接线** — `gqa_backend_wrap.py` 包装 stock AttentionBackend；修 `attention.py` API（`load_kernel`）；`stage3_gqa_launch.sh`
+- S4：`hip_graph.py` model-runner 补丁 + `stage4_graph_launch.sh`（默认关）
+- Phase2 默认：仅 GQA；`FDU_KV_CACHE_STRATEGY=none`（defrag/FP8 不开）
+- overlay：`patches/vllm_cscc/overlay/vllm/v1/attention/backends/fdu_gqa_attn.py`
+- 同步 easy_scoring / parameter_tuning / env_vars / roadmap
+
+## [v0.2.13] - 2026-07-10
+
+### 紧急恢复（本队 59.97 ≈ Baseline；纠正「84=本队」误标）
+- **澄清**：排行榜「富贵花开」84.74 **不是本队账号**；本队正式分以 lutinayi 59.97 为准
+- `launch.sh` 默认 stock `api_server`；gpu **0.94**；`DO_WARMUP=0`；`ENFORCE_EAGER=1`
+- 更新 scoring / easy_scoring / report / roadmap / 提交清单中的账号归属
+
+### 评分与实测结果深度解读
+- `docs/scoring_and_results_interpretation.md`：官方公式、Baseline 反推、7/6 vs 7/10 复盘
+- `optimization_roadmap.md` §5.3 追加 7/10 平台结果（59.97）
+
 ## [v0.2.12] - 2026-07-10
 
 ### 高性价比加固 + 合并冲突清理

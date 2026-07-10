@@ -6,10 +6,34 @@
 from __future__ import annotations
 
 import os
+import sys
+from pathlib import Path
+
+
+def sanitize_import_paths() -> None:
+    """Drop repo root from sys.path so vendored vllm/ does not shadow pip wheel."""
+
+    def _is_repo_root(path: Path) -> bool:
+        return (path / "launch.sh").is_file() and (path / "vllm").is_dir()
+
+    cleaned: list[str] = []
+    for entry in sys.path:
+        if not entry:
+            continue
+        try:
+            resolved = Path(entry).resolve()
+        except OSError:
+            cleaned.append(entry)
+            continue
+        if _is_repo_root(resolved):
+            continue
+        cleaned.append(entry)
+    sys.path[:] = cleaned
 
 
 def configure_before_vllm_import() -> None:
     """赛题允许：启动参数 / 环境变量；不修改 locked CLI 参数。"""
+    sanitize_import_paths()
     # ── 1.4 降低 Python 侧日志开销 ──
     os.environ.setdefault("VLLM_LOGGING_LEVEL", "WARNING")
     os.environ.setdefault("VLLM_CONFIGURE_LOGGING", "0")

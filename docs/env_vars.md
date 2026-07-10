@@ -1,35 +1,39 @@
 # 环境变量说明（评测提交必填）
 
+> 冲刺阶段配额见 [sprint_strategy_0711.md](./sprint_strategy_0711.md)
+
 ## Phase 阶段
 
 | 变量名 | 默认 | 作用 |
 |--------|------|------|
-| `FDU_PHASE` | `1` | `1`=仅 launch/ROCm（Phase 1）；`2+`=启用 GQA/KV/attention 钩子 |
+| `FDU_PHASE` | `1` | `1`=仅 launch/ROCm（S1/S2）；`2`=启用 GQA 等钩子（S3+） |
 
-## FDU 优化开关（Phase 2+，Phase 1 默认关）
+## FDU 优化开关
 
-| 变量名 | Phase 1 默认 | Phase 2+ 默认 | 作用 |
-|--------|-------------|--------------|------|
+| 变量名 | Phase 1 / S1 | Phase 2 / S3 | 作用 |
+|--------|--------------|--------------|------|
 | `FDU_ENABLE` | `1` | `1` | 总开关 |
-| `FDU_KV_CACHE_STRATEGY` | `none` | `defrag` | KV 块分配策略 |
-| `FDU_ATTENTION_BACKEND` | `vllm_default` | `dcu_optimized` | Attention 路径 |
-| `FDU_ENABLE_KV_QUANT` | `0` | `0` | KV 在线 FP8（默认关，保精度） |
-| `FDU_ENABLE_PREFIX_CACHE` | `1` | `1` | Prefix 缓存（配合 launch CLI） |
-| `FDU_ENABLE_GQA_OPT` | `0` | `1` | GQA einsum 路径 |
-| `FDU_ENABLE_HIP_GRAPH` | `0` | `0` | HIP Graph decode |
+| `FDU_KV_CACHE_STRATEGY` | `none` | **`none`** | defrag **未接线**，保持 none |
+| `FDU_ATTENTION_BACKEND` | `vllm_default` | `vllm_default` | GQA wrap stock selector |
+| `FDU_ENABLE_KV_QUANT` | `0` | `0` | KV FP8 默认关 |
+| `FDU_ENABLE_PREFIX_CACHE` | `1` | `1` | Prefix 缓存 |
+| `FDU_ENABLE_GQA_OPT` | `0` | **`1`** | GQA selector wrap（已接线） |
+| `FDU_ENABLE_HIP_GRAPH` | `0` | `0` | 仅 S4；须 `ENFORCE_EAGER=0` |
 
-## 启动参数（launch.sh · Phase 1 最有把握项）
+## 启动参数（launch.sh · S1 Recover）
 
 | 变量名 | 默认 | 说明 | 配置原因 |
 |--------|------|------|----------|
-| `MODEL_PATH` | 自动：`/root`→`/data`→`$HOME` | 模型路径 | SCNet PDF：`/root` 加载更快 |
+| `MODEL_PATH` | 自动：`/root`→`/data`→`$HOME` | 模型路径 | SCNet `/root` 加载更快 |
 | `PORT` | `8000` | 服务端口 | 评测机默认 |
-| `GPU_MEMORY_UTILIZATION` | `0.95` | 显存利用率 | 相对 stock 0.92；OOM 回退 0.94 |
-| `DO_WARMUP` | `1` | 启动后分档 warmup | 稳 TTFT P99，防 SLA 熔断 |
-| `WARMUP_ROUNDS` | `1` | warmup 轮数 | 评测机可接受启动耗时 |
-| `WARMUP_TIER` | `all` | `all` 时 **先 8–16K** | 主攻 50% 权重档 |
-| `ENABLE_PREFIX_CACHING` | `1` | vLLM prefix caching CLI | 共享前缀降 TTFT |
-| `HEALTH_TIMEOUT` | `600` | 健康检查超时（秒） | 大模型加载慢 |
+| `GPU_MEMORY_UTILIZATION` | **`0.94`** | 显存利用率 | **禁止默认 0.95** |
+| `DO_WARMUP` | **`0`** | 启动 warmup | 平台默认关；S2 可试 |
+| `WARMUP_ROUNDS` | `1` | warmup 轮数 | — |
+| `WARMUP_TIER` | `8-16K` | warmup 档位 | 仅 DO_WARMUP=1 |
+| `ENABLE_PREFIX_CACHING` | `1` | prefix caching | 低风险 |
+| `USE_FDU_SERVER` | **`0`** | `1`=fdu_vllm.server | S1/S2 stock；**S3 起用 1** |
+| `ENFORCE_EAGER` | **`1`** | `--enforce-eager` | S2 可 A/B 关 |
+| `HEALTH_TIMEOUT` | `900` | 健康检查超时 | 大模型加载慢 |
 
 ## ROCm/DCU（scripts/rocm_env.sh）
 
@@ -40,7 +44,7 @@
 | `GPU_MAX_HW_QUEUES` | `2` | 硬件队列 |
 | `HSA_ENABLE_SDMA` | `1` | 异步 SDMA |
 | `PYTORCH_HIP_ALLOC_CONF` | `expandable_segments:True` | 显存分配 |
-| `HIPCC_COMPILE_FLAGS_APPEND` | `-O3` | vLLM 编译优化（compile_vllm.sh） |
+| `HIPCC_COMPILE_FLAGS_APPEND` | `-O3` | vLLM 编译优化 |
 | `GPU_ARCH` | 自动 | hipcc `--offload-arch` |
 
 ## 已移除（违规/无效）

@@ -83,40 +83,56 @@ cd /public/home/xdzs2026_c415/testdata
 
 ## 三、跑 lutinayi_branch 优化版
 
-### 3.1 把代码弄进容器（只需一次）
+**与第二节 baseline 同一套路径与准备，只把最后一步 `start_vllm.sh` 换成 `launch.sh`。**
+
+### 3.1 代码（只需一次）
 
 ```bash
 cd /public/home/xdzs2026_c415
 git clone -b lutinayi_branch \
   https://gitlab.eduxiji.net/fudiankuangxiangqu/2025pra-fdu-fudiankuangxiangqu.git
-cd 2025pra-fdu-fudiankuangxiangqu
-pip install -r requirements.txt
+# 已有仓库则：
+cd 2025pra-fdu-fudiankuangxiangqu && git pull origin lutinayi_branch
+grep -n '<<<<<<' launch.sh config.yaml || echo "OK"
 ```
 
-### 3.2 启动优化服务
-
-**先停掉 baseline 的 start_vllm（若在跑）：** `pkill -f vllm` 或关掉终端 1
-
-**终端 1：**
+### 3.2 终端 1（对齐 baseline 第 7–10 步，仅第 10 步不同）
 
 ```bash
-export MODEL_PATH=/root/Qwen3.5-27B
+# 与 baseline 完全相同
+cp -r /public/home/xdzs2026_c415/Qwen3.5-27B /root/Qwen3.5-27B
+
+cd /public/home/xdzs2026_c415/vllm_cscc
+python setup.py bdist_wheel
+cd dist
+pip install vllm-*.whl --no-deps
+
+# 停 baseline（若在跑）
+pkill -f vllm || true
+sleep 5
+
+# 仅此处与 baseline 不同：launch.sh 替代 start_vllm.sh
 export PROJ=/public/home/xdzs2026_c415/2025pra-fdu-fudiankuangxiangqu
+export MODEL_PATH=/root/Qwen3.5-27B
+export PYTHONPATH=$PROJ/src
+export FDU_PHASE=1
+export DO_WARMUP=0
 bash $PROJ/scripts/scnet_start_optimized.sh
 ```
 
-### 3.3 测评
+日志里应有 `[launch] === Phase 1`，进程为 `python -m fdu_vllm.server`（不是纯 `vllm serve`）。
 
-**终端 2：**
+### 3.3 终端 2（与 baseline 相同 curl + 吞吐）
 
 ```bash
-cd /public/home/xdzs2026_c415/testdata
-./run_throughput.sh 4-8K 10
-./run_throughput.sh 8-16K 10
-./run_throughput.sh 16-32K 10
+curl http://127.0.0.1:8001/v1/chat/completions \
+  -H "Content-Type: application/json" \
+  -d '{"model":"Qwen3.5-27B","messages":[{"role":"user","content":"你好回复一下"}],"max_tokens":16}'
 
-# Phase1 门禁（主攻 8-16K）
-bash /public/home/xdzs2026_c415/2025pra-fdu-fudiankuangxiangqu/scripts/gate_check.sh quick
+cd /public/home/xdzs2026_c415/testdata
+./run_throughput.sh 8-16K 10
+./run_throughput.sh 4-8K 10
+./run_throughput.sh 16-32K 10
 ```
 
 对比 baseline 与优化版三档数字，填 `report.md`。

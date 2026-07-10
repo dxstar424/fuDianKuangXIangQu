@@ -82,6 +82,15 @@ def activate() -> None:
             defrag_threshold=cfg.defrag_threshold,
         )
 
+    # GQA: always try selector patch when enabled (even if backend=vllm_default)
+    if cfg.enable_gqa_opt:
+        try:
+            from fdu_vllm.gqa_backend_wrap import patch_attn_selector
+
+            patch_attn_selector()
+        except Exception as e:
+            logger.warning("GQA selector patch early-fail: %s", e)
+
     if cfg.attention_backend in ("dcu_optimized", "flash_attn"):
         from fdu_vllm.attention import install_attention_hooks
 
@@ -91,9 +100,13 @@ def activate() -> None:
         )
 
     if cfg.enable_hip_graph:
-        from fdu_vllm.hip_graph import install_hip_graph_hooks
+        from fdu_vllm.hip_graph import install_hip_graph_hooks, patch_model_runner_graph
 
         _EXEC = install_hip_graph_hooks(max_batch_size=1)
+        try:
+            patch_model_runner_graph(_EXEC)
+        except Exception as e:
+            logger.warning("HIP Graph runner patch: %s", e)
 
     _try_patch_vllm_worker(cfg)
 

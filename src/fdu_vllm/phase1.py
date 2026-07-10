@@ -11,8 +11,8 @@ logger = logging.getLogger("fdu_vllm.phase1")
 # Phase 1 必须项（与 deep_optimization_guide.md §1.1–1.7 对齐）
 PHASE1_DEFAULTS = {
     "FDU_PHASE": "1",
-    "GPU_MEMORY_UTILIZATION": "0.95",
-    "DO_WARMUP": "1",
+    "GPU_MEMORY_UTILIZATION": "0.94",
+    "DO_WARMUP": "0",
     "ENABLE_PREFIX_CACHING": "1",
     "FDU_ENABLE_PREFIX_CACHE": "1",
     "FDU_ENABLE_KV_QUANT": "0",
@@ -21,6 +21,8 @@ PHASE1_DEFAULTS = {
     "FDU_KV_CACHE_STRATEGY": "none",
     "FDU_ATTENTION_BACKEND": "vllm_default",
     "VLLM_LOGGING_LEVEL": "WARNING",
+    "USE_FDU_SERVER": "0",
+    "ENFORCE_EAGER": "1",
 }
 
 

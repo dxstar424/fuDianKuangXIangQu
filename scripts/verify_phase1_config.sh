@@ -17,14 +17,23 @@ _check() {
     fi
 }
 
-_check "launch.sh: gpu 0.95" \
-    grep -q 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"' "$PROJ_DIR/launch.sh"
+_check "launch.sh: gpu 0.94" \
+    grep -q 'GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"' "$PROJ_DIR/launch.sh"
+
+_check "launch.sh: stock api_server default" \
+    grep -q 'USE_FDU_SERVER="${USE_FDU_SERVER:-0}"' "$PROJ_DIR/launch.sh"
+
+_check "launch.sh: enforce-eager default" \
+    grep -q 'ENFORCE_EAGER="${ENFORCE_EAGER:-1}"' "$PROJ_DIR/launch.sh"
+
+_check "launch.sh: warmup off by default" \
+    grep -q 'DO_WARMUP="${DO_WARMUP:-0}"' "$PROJ_DIR/launch.sh"
 
 _check "launch.sh: prefix caching" \
     grep -q 'enable-prefix-caching' "$PROJ_DIR/launch.sh"
 
 _check "launch.sh: disable logs" \
-    grep -q 'disable-log-requests' "$PROJ_DIR/launch.sh" \
+    grep -q 'no-enable-log-requests\|disable-log-requests' "$PROJ_DIR/launch.sh" \
     && grep -q 'disable-log-stats' "$PROJ_DIR/launch.sh"
 
 _check "launch.sh: bf16 dtype" \

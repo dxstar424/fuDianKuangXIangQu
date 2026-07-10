@@ -1,4 +1,4 @@
-"""Attention backend integration with HIP fallback."""
+"""Attention backend integration with HIP fallback + GQA."""
 
 from __future__ import annotations
 
@@ -22,7 +22,8 @@ def install_attention_hooks(enable_gqa: bool = True, use_fp8: bool = False):
     )
 
     if _BACKEND.is_rocm():
-        loaded = _BACKEND.load_hip_kernel(verbose=True)
+        # dcu_attention API: load_kernel / kernel_loaded (not load_hip_kernel)
+        loaded = _BACKEND.load_kernel(verbose=True)
         if not loaded:
             logger.info("HIP kernel unavailable; using GQA PyTorch path")
     else:
@@ -30,6 +31,14 @@ def install_attention_hooks(enable_gqa: bool = True, use_fp8: bool = False):
 
     if enable_gqa:
         _patch_forward_with_gqa(_BACKEND)
+
+    # Also patch vLLM selector when available (real runtime path)
+    try:
+        from fdu_vllm.gqa_backend_wrap import patch_attn_selector
+
+        patch_attn_selector()
+    except Exception as e:
+        logger.warning("vLLM GQA selector patch skipped: %s", e)
 
     return _BACKEND
 
@@ -42,7 +51,9 @@ def _patch_forward_with_gqa(backend) -> None:
     def _forward_gqa(query, key, value):
         try:
             return gqa_scaled_dot_product_attention(
-                query, key, value,
+                query,
+                key,
+                value,
                 backend.num_heads,
                 backend.num_kv_heads,
                 backend.scale,
@@ -52,13 +63,21 @@ def _patch_forward_with_gqa(backend) -> None:
 
     backend._forward_torch = _forward_gqa
 
-    def _forward_safe(query, key, value, block_tables=None, context_lens=None, max_context_len=0, alibi_slopes=None):
-        if backend.using_hip_kernel:
+    def _forward_safe(
+        query,
+        key,
+        value,
+        block_tables=None,
+        context_lens=None,
+        max_context_len=0,
+        alibi_slopes=None,
+    ):
+        if getattr(backend, "kernel_loaded", False):
             try:
-                return backend._forward_hip(query, key, value, block_tables, context_lens, max_context_len)
-            except NotImplementedError:
+                return backend._forward_hip(query, key, value)
+            except (NotImplementedError, Exception):
                 pass
         return backend._forward_torch(query, key, value)
 
     backend.forward = _forward_safe
-    logger.info("GQA-optimized forward installed")
+    logger.info("GQA-optimized forward installed on DCUAttentionBackend")

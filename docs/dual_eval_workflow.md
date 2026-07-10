@@ -10,7 +10,7 @@
 | | 官方竞赛平台 | SCNet 容器 |
 |--|-------------|------------|
 | **用途** | 正式提交、得分 | 本地复现编译/启动、拿详细 log |
-| **你的权限** | 富贵花开 ✅ 可提交 | xdzs2026_c415 ✅ 可 SSH |
+| **你的权限** | 本队竞赛账号 ✅ 可提交 | xdzs2026_c415 ✅ 可 SSH |
 | **GitLab** | 平台自动拉 `main` | `git clone` 常 **403** ❌ |
 | **报错** | 仅「missing setup.py」「vLLM build failed」 | 跑脚本可得**完整编译 log** |
 | **打分** | ✅ 唯一有效 | ❌ 仅自测 |
@@ -24,7 +24,7 @@
 | 步骤 | 谁 | 在哪 |
 |------|-----|------|
 | 改代码 + push GitLab `main` | 队友 / 本地 | Windows + GitLab |
-| **平台提交评测** | **富贵花开** | pra.xtnl.org.cn / course.educg.net |
+| **平台提交评测** | **本队竞赛账号**（非「富贵花开」） | pra.xtnl.org.cn / course.educg.net |
 | zip 下载最新 `main` | 你 | GitLab 网页 → Download ZIP |
 | zip 传到 SCNet | 你 | 网页上传 / `scp` / 共享盘 |
 | **镜像平台编译 + 保存 log** | 你 | SCNet：`platform_build.sh` |
@@ -34,7 +34,7 @@
 
 ## A. 官方平台提交（得分）
 
-1. 登录竞赛平台（**富贵花开**）
+1. 登录竞赛平台（**本队账号**）
 2. 仓库：`https://gitlab.eduxiji.net/fudiankuangxiangqu/2025pra-fdu-fudiankuangxiangqu.git`
 3. 分支：**`main`**
 4. 确认 commit ≥ **`08e608b`**（含 `requirements/`）

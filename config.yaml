@@ -9,16 +9,16 @@ phase: 1
 
 # --- KV Cache 管理 ---
 kv_cache:
-  strategy: "none"                 # Phase 1：不装 defrag 钩子；Phase 2 改 defrag
+  strategy: "none"                 # 保持 none；defrag 未接线勿开
   block_size: 16
-  gpu_memory_utilization: 0.95     # 相对 stock 0.92；OOM → 回退 0.94
+  gpu_memory_utilization: 0.94     # 7/10 用 0.95 导致 16-32K 负优化；恢复 0.94
   enable_kv_quant: false           # 默认关，保精度系数
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7
 
 # --- Attention 后端 ---
 attention:
-  backend: "vllm_default"          # Phase 1：stock attention；Phase 2 改 dcu_optimized
+  backend: "vllm_default"          # S3：GQA wrap stock selector，勿默认 dcu_optimized
   use_paged_attention: true
   num_kv_heads: 32                 # Qwen3.5-27B GQA
   num_q_heads: 64
@@ -26,7 +26,7 @@ attention:
 # --- 执行路径（不触碰 batch scheduler）---
 executor:
   enable_prefix_caching: true      # Phase 1 必开
-  use_cuda_graph: false            # 自研 HIP Graph 钩子默认关；vLLM 原生 graph 不传 --enforce-eager
+  use_cuda_graph: false            # 自研 HIP Graph 默认关；S1 另用 ENFORCE_EAGER=1
   cuda_graph_max_bs: 1             # 并发=1
 
 # --- 精度门禁 ---

@@ -1,8 +1,9 @@
 # 参数调优手册（由整合负责人维护）
 
 > **维护人**：角色 I（整合与 Git）  
-> **提交对齐**：[env_vars.md](./env_vars.md)（评测必填，须与本文一致）  
-> **调参原则**：一次只动一个变量；每次改动记录 A/B 数据；疑似负优化立即回滚。
+> **冲刺阶段**：[sprint_strategy_0711.md](./sprint_strategy_0711.md)  
+> **提交对齐**：[env_vars.md](./env_vars.md)  
+> **调参原则**：一次只动一个变量；每次改动记录 A/B；疑似负优化立即回滚。
 
 ---
 
@@ -10,79 +11,67 @@
 
 | 场景 | 做法 |
 |------|------|
-| 想提 8–16K 吞吐 | 先查 §3「显存/KV」→ 改一个参数 → 交给角色 G 跑门禁 |
-| 合并后跑不通 | 整合负责人查 §6「合并冲突参数」→ 回滚 tag |
-| 指标好但 SLA 熔断 | 角色 G 否决；整合负责人回滚该 MR 引入的参数 |
-| 搞不清某参数作用 | 整合负责人做单变量 A/B，结果写入 §4 实测表 |
+| S1 恢复提交 | `verify_recover_config.sh` → SCNet 三档 → 平台 1 次 |
+| S2 launch A/B | `ab_stage2.sh` → 8–16K×5 → 只合赢家 |
+| S3 GQA | `stage3_gqa_launch.sh` → token 一致 → quick → 平台 |
+| S4 Graph | 仅 S3 净增后；`stage4_graph_launch.sh` |
+| 指标好但 SLA 熔断 | 角色 G 否决；回滚 tag |
 
 ---
 
 ## 2. 参数总览（按影响面）
 
-### 2.1 启动与显存（影响 TTFT + 长档吞吐）
+### 2.1 启动与显存（S1 默认）
 
 | 参数 | 默认值 | 作用 | 调大/开 | 调小/关 | 风险 |
 |------|--------|------|---------|---------|------|
-| `GPU_MEMORY_UTILIZATION` | `0.95` | vLLM KV 池占 GPU 显存比例 | 长档 KV 更多，吞吐↑ | OOM 风险↓ | ≥0.96 易 OOM；OOM 回退 0.94 |
-| `DO_WARMUP` | `1` | 启动后分档 dummy 推理 | TTFT P99 更稳 | 启动快 | 关可能导致首条 SLA 熔断 |
-| `WARMUP_ROUNDS` | `1` | warmup 轮数 | TTFT 更稳 | 启动更快 | 多轮启动慢数分钟 |
-| `WARMUP_TIER` | `all` | 预热档位 | 全档 TTFT 稳 | 只预热指定档 | 未预热档首条可能尖刺 |
-| `ENABLE_PREFIX_CACHING` | `1` | vLLM prefix 缓存 CLI | 共享前缀 TTFT↓ | 略减内存开销 | 盲测收益有限 |
-| `FDU_ENABLE_PREFIX_CACHE` | `1` | 与上配合生效 | 同上 | prefix 可能不生效 | launch 须 export |
+| `GPU_MEMORY_UTILIZATION` | **`0.94`** | KV 池占比 | 长档 KV↑ | OOM↓ | **禁止默认 0.95**（7/10 负优化） |
+| `DO_WARMUP` | **`0`** | 分档 dummy | TTFT 稳 | 启动快 | 平台默认关；S2 可试单档 |
+| `WARMUP_ROUNDS` | `1` | warmup 轮数 | 更稳 | 更快 | 多轮慢数分钟 |
+| `WARMUP_TIER` | `8-16K` | 预热档 | 主档稳 | — | 仅 DO_WARMUP=1 |
+| `ENABLE_PREFIX_CACHING` | `1` | prefix CLI | TTFT↓ | — | 低风险保留 |
+| `USE_FDU_SERVER` | **`0`** | 插件入口 | S3 起用 | stock | S1/S2 保持 0 |
+| `ENFORCE_EAGER` | **`1`** | 禁原生 graph | 稳 | `0`=开 graph | S2 主 A/B 项 |
 
-### 2.2 FDU 优化开关（影响 TPOT / 吞吐 / 精度）
+### 2.2 FDU 优化开关
 
-| 参数 | 默认值 | 作用 | 建议 |
-|------|--------|------|------|
-| `FDU_ENABLE` | `1` | 总开关 | 调试 stock 时设 0 |
-| `FDU_ENABLE_KV_QUANT` | `0` | KV 在线 FP8 | **默认关**；G 确认精度+净 TPOT 后再开 |
-| `FDU_PHASE` | `1` | 阶段门控 | `1`=仅 Phase 1；`2+` 才开钩子 |
-| `FDU_ENABLE_GQA_OPT` | `0`（Phase1）/`1`（Phase2） | GQA einsum | Phase 1 关；门禁后再开 |
-| `FDU_ENABLE_HIP_GRAPH` | `0` | Graph capture | TPOT↓；长测 SLA 不过则关 |
-| `FDU_KV_CACHE_STRATEGY` | `none`（Phase1）/`defrag` | KV 块策略 | Phase 1 不装钩子 |
-| `FDU_ATTENTION_BACKEND` | `vllm_default`（Phase1） | Attention 路径 | Phase 1 走 stock attention |
+| 参数 | S1 默认 | S3（Phase2） | 建议 |
+|------|---------|--------------|------|
+| `FDU_PHASE` | `1` | `2` | S3 才升 |
+| `FDU_ENABLE_GQA_OPT` | `0` | **`1`** | **唯一优先深接项** |
+| `FDU_ENABLE_HIP_GRAPH` | `0` | `0` | 仅 S4；须 `ENFORCE_EAGER=0` |
+| `FDU_ENABLE_KV_QUANT` | `0` | `0` | 默认不做 |
+| `FDU_KV_CACHE_STRATEGY` | `none` | **`none`** | defrag 未接线，勿开 |
+| `FDU_ATTENTION_BACKEND` | `vllm_default` | `vllm_default` | GQA wrap stock selector |
 
-### 2.3 ROCm 环境（微优化，一般不动）
+### 2.3 赛题锁定（禁止改）
 
-| 参数 | 默认 | 作用 |
-|------|------|------|
-| `GPU_MAX_HW_QUEUES` | `2` | 硬件队列 |
-| `HSA_ENABLE_SDMA` | `1` | 异步 DMA |
-| `PYTORCH_HIP_ALLOC_CONF` | `expandable_segments:True` | 显存分配器 |
-| `OMP_NUM_THREADS` | `8` | CPU 线程，防抢占 |
-
-### 2.4 赛题锁定（禁止改）
-
-以下参数**不得**在优化中修改，门禁角色 G 每次合并必查：
-
-- `--max-num-seqs`、`--max-num-batched-tokens`
-- `max_tokens`（评测脚本锁定）
-- `temperature`（必须为 0）
-- batch scheduler 相关代码
-- 模型权重 / 结构
+- `--max-num-seqs`、`--max-num-batched-tokens`、batch scheduler
+- `max_tokens`、`temperature=0`、模型权重
 
 ---
 
-## 3. 推荐调参顺序（整合负责人执行）
+## 3. 推荐调参顺序（少次 · Phase2 三板）
 
 ```
-【最有把握 · Phase 1 默认已开，一般只做 A/B】
-1. GPU_MEMORY_UTILIZATION  默认 0.95；OOM → 0.94 → 0.93 → 0.92
-2. 确认 warmup + prefix 生效（看 launch 日志「Phase 1 sure-win」）
-3. 关/开 ENABLE_PREFIX_CACHING 做一次 A/B（盲测收益）
-
-【Phase 1 门禁通过后再动】
-4. FDU_PHASE=2 + FDU_ENABLE_GQA_OPT=1（须 token 一致性）
-5. KV defrag / FP8（须 G 门禁）
-6. FDU_ENABLE_HIP_GRAPH=1（须 G 长测）
+【S1】verify_recover_config → 三档 SCNet → 平台 1 次（≥65）
+【S2】ab_stage2: eager-off / warmup-816 → 只合赢家
+【Phase2 三板各跑一轮，一次只开一块】
+  B GQA:      stage3_gqa_launch.sh → token 一致 → 8-16K×5
+  C defrag:   stage3_defrag_launch.sh → 16-32K×5（无收益可弃）
+  D Graph:    ab_stage2 eager-off 或 stage4_graph_launch.sh
+【合 main】仅「合」项 + quick gate → 平台 ≤1/阶段
 ```
 
-**一次只改一项**，改完提交到集成分支，等 G 评测后再动下一项。  
-清单见 [easy_scoring.md](./easy_scoring.md)。
+详见 [sprint_strategy_0711.md](./sprint_strategy_0711.md) §5–§7。
+
+脚本：`run_phase2_bench.sh`、`stage3_defrag_launch.sh`
+
+**判据**：8–16K +≥0.5 tok/s 且 SLA 未逼近 Baseline×1.5。
 
 ---
 
-## 4. 实测 A/B 记录表（整合负责人填写）
+## 4. 实测 A/B 记录表
 
 | 日期 | 变量 | A 值 | B 值 | 8-16K 吞吐 | TTFT P99 | TPOT P99 | 精度 Δ | 结论 |
 |------|------|------|------|------------|----------|----------|--------|------|
@@ -91,35 +80,20 @@
 
 ---
 
-## 5. 难以解释的现象 → 排查清单
+## 5. 难以解释的现象 → 排查
 
 | 现象 | 可能原因 | 排查 |
 |------|----------|------|
-| 吞吐 0 / 全 failed | 服务未启动、模型路径错 | curl :8001/health |
-| TTFT 突然爆 | 未 warmup、prefix 未开 | 查 launch env |
-| TPOT 变差但吞吐不变 | KV 量化独立反量化 | 关 FP8 对比 |
-| 合并后编译过、启动崩 | 两分支改了同一 hook | bisect / 回滚 tag |
-| 平台分降、SCNet 升 | 评测机 env 与 SCNet 不一致 | 对齐 launch.sh |
+| 开 FDU_PHASE=2 无变化 | 未 `USE_FDU_SERVER=1` / 未 activate | 查日志 GQA selector patch |
+| 吞吐 0 | 服务未起 | curl :8001/health |
+| TTFT 爆 | 未 warmup | S2 试 warmup-816 |
+| Graph 崩 | DCU graph 不稳 | `ENFORCE_EAGER=1` `FDU_ENABLE_HIP_GRAPH=0` |
+| 平台降 SCNet 升 | env 不一致 | 对齐 launch.sh |
 
 ---
 
 ## 6. 合并冲突高发区
 
-合并前整合负责人重点 diff 这些文件：
+- `launch.sh`、`config.yaml`、`hooks.py`、`gqa_backend_wrap.py`、`env_vars.md` / 本文
 
-- `launch.sh`（env 默认值）
-- `config.yaml`
-- `src/fdu_vllm/hooks.py`（开关加载顺序）
-- `src/fdu_vllm/config.py`
-- `docs/env_vars.md` / 本文档
-
-**规则**：冲突时优先保留「G 上次门禁通过」的版本，再逐项 cherry-pick 新优化。
-
----
-
-## 7. 与 env_vars.md 的关系
-
-- **env_vars.md**：官方提交用，变量名 + 取值 + 原因（精简）
-- **本文档**：队内调参实验记录 + 详细作用 + A/B 数据（可长）
-
-整合负责人：**改参数 → 先更本文 §4 → 定稿后同步 env_vars.md**。
+冲突时优先保留「G 上次门禁通过」版本。
