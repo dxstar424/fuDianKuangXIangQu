@@ -1,5 +1,13 @@
 # 变更日志
 
+## [v0.2.11] - 2026-07-10
+
+### SCNet GitLab 权限排查工具链
+- `scripts/scnet_gitlab_diagnose.sh`：DNS/proxy/curl/git 全量诊断
+- `scripts/scnet_gitlab_fix_hosts.sh`：修复容器 DNS（111.6.188.181）
+- `scripts/scnet_gitlab_clone.sh`：GITLAB_TOKEN 克隆私有仓库
+- `docs/scnet_gitlab_access.md`：10 类原因 + 决策树
+
 ## [v0.2.10] - 2026-07-10
 
 ### 双通道评测工作流（官方无 log + SCNet 无 git）
