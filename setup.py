@@ -834,10 +834,13 @@ def get_version_add(sha: Optional[str] = None) -> str:
     if os.getenv("ROCM_PATH"):
         rocm_path = os.getenv('ROCM_PATH', "")
         rocm_version_path = os.path.join(rocm_path, '.info', "rocm_version")
-        with open(rocm_version_path, 'r',encoding='utf-8') as file:
-            lines = file.readlines()
-        rocm_version=lines[0].replace(".", "")
-        version += ".dtk" + rocm_version
+        try:
+            with open(rocm_version_path, 'r', encoding='utf-8') as file:
+                lines = file.readlines()
+            rocm_version = lines[0].replace(".", "")
+            version += ".dtk" + rocm_version
+        except OSError as e:
+            logger.warning("Failed to read ROCm version from %s: %s", rocm_version_path, e)
     
     new_version_content = f"""
 try:

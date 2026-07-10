@@ -1,5 +1,11 @@
 # 变更日志
 
+## [v0.2.9] - 2026-07-10
+
+### 平台编译修复（vLLM build failed）
+- 补全 vendor 遗漏的 `requirements/`（`setup.py` 的 `get_requirements()` 依赖）与 `LICENSE`
+- `setup.py`：ROCm 版本文件缺失时降级警告，避免 `get_version_add` 崩溃
+
 ## [v0.2.8] - 2026-07-10
 
 ### 平台提交修复（vLLM 源码 vendor 到根目录）

@@ -24,12 +24,12 @@ fi
 
 bash "$SCRIPT_DIR/apply_vllm_patches.sh" "$STAGING"
 
-for item in setup.py pyproject.toml CMakeLists.txt MANIFEST.in use_existing_torch.py vllm cmake csrc fdu_vllm; do
+for item in setup.py pyproject.toml CMakeLists.txt MANIFEST.in use_existing_torch.py LICENSE vllm cmake csrc fdu_vllm requirements; do
     rm -rf "$PROJ_DIR/$item"
     cp -a "$STAGING/$item" "$PROJ_DIR/$item"
 done
 
 echo "[prepare_submit] OK: root has setup.py + vllm/"
-echo "  git add setup.py pyproject.toml CMakeLists.txt MANIFEST.in use_existing_torch.py vllm cmake csrc fdu_vllm"
+echo "  git add setup.py pyproject.toml CMakeLists.txt MANIFEST.in use_existing_torch.py LICENSE vllm cmake csrc fdu_vllm requirements"
 echo "  git commit -m 'chore: vendor vllm_cscc source at repo root for platform'"
 echo "  git push origin <your-branch>"
