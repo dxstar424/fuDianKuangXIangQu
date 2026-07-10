@@ -35,8 +35,10 @@ case "$MODE" in
     export WARMUP_ROUNDS=1
     echo "[ab_stage2] B=warmup-816: DO_WARMUP=1 TIER=8-16K ENFORCE_EAGER=1"
     ;;
+  # 推荐入口：见 scripts/opt_816k.sh（按 8-16K 实测拆 TPOT/TTFT）
   *)
     echo "Usage: ab_stage2.sh [baseline|eager-off|warmup-816]" >&2
+    echo "Or:    bash scripts/opt_816k.sh [tpot|ttft|recover]" >&2
     exit 1
     ;;
 esac

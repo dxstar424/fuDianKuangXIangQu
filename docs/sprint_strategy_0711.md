@@ -76,26 +76,44 @@ cd ~/testdata
 
 ---
 
-## 4. S2 — Launch 单变量（最多 2 实验 → 合 1 个赢家）
+## S2b — 8–16K 实测锚点（SCNet · 10 req）
 
-```bash
-bash scripts/ab_stage2.sh baseline      # A：recover 默认
-bash scripts/ab_stage2.sh eager-off     # B：vLLM 原生 graph（也算 Graph 对照）
-bash scripts/ab_stage2.sh warmup-816    # C：仅 TTFT 尖刺时试
+```
+Output 12.19 tok/s (peak 15)
+TTFT  mean 10.9s / median 11.4s / P99 15.9s
+TPOT  mean 70.5ms / P99 71.0ms（极稳）
+E2EL  ~76.8s = TTFT≈11s + decode≈66s → decode 占墙钟 ~86%
 ```
 
-每轮后（服务已起）：
+| 结论 | 动作 |
+|------|------|
+| 吞吐已高于平台 10.04 / Baseline~9.6 | 方向对，继续抠 8–16K |
+| **TPOT 是主瓶颈** | decode≈86% 墙钟；原生 Graph **已证伪** |
+| TTFT P99 尖刺大 | 可选 `opt_816k.sh ttft`（单档 warmup，期望增益有限） |
+| TPOT 71ms 若 Baseline≈49ms → 约 1.45× | **逼近 1.5 熔断**，勿再开会抬 TPOT 的项 |
+
+### S2b 实测：`opt_816k.sh tpot`（ENFORCE_EAGER=0）— **NO-GO**
+
+| 指标 | recover | tpot (eager-off) | Δ |
+|------|---------|------------------|---|
+| Output tok/s | 12.19 | **12.17** | −0.02（噪声） |
+| TTFT P99 | 15.9s | 15.86s | 持平 |
+| TPOT P99 | 71.0ms | 71.16ms | 持平 |
+
+门禁 Output≥12.7 **未过**。与 DCU decode「权重 IO 墙」一致：关 eager / 原生 Graph **不降 TPOT**。  
+**保持 `ENFORCE_EAGER=1`，勿合入 launch 默认。**
 
 ```bash
-bash scripts/run_phase2_bench.sh 8-16K 5
-# defrag/长档再加：
-bash scripts/run_phase2_bench.sh 16-32K 5
+# 可选次实验（期望小）：压 TTFT P99 尖刺
+bash scripts/opt_816k.sh ttft
+cd ~/testdata && ./run_throughput.sh 8-16K 10
+# go: TTFT P99 明显↓ 且 Output 不降；否则放弃，平台提 recover
 ```
 
-| 变量 | 主看 | 合入条件 |
-|------|------|----------|
-| `ENFORCE_EAGER=0` | TPOT、8–16K 吞吐 | +≥0.5 tok/s，16–32K 不崩 |
-| 单档 warmup | TTFT P99 | 仅 TTFT 尖刺时合入 |
+| 变量 | 主看 | 合入条件 | 状态 |
+|------|------|----------|------|
+| `ENFORCE_EAGER=0` | TPOT、8–16K 吞吐 | +≥0.5 tok/s | **❌ NO-GO** |
+| 单档 warmup | TTFT P99 | 尖刺↓ 且吞吐不降 | 待测 / 低优先 |
 
 记录写入 [parameter_tuning.md](./parameter_tuning.md) §4。
 
