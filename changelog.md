@@ -1,5 +1,54 @@
 # 变更日志
 
+## [v0.2.15] - 2026-07-11
+
+### Phase2 三板全部证伪 → 回归 S1 recover
+
+**结论：Decode 端在 DCU 上已触碰物理极限。GQA / HIP Graph / KV FP8 三项全部放弃。**
+
+#### GQA wrap — 源码审查确认无效
+
+- **改动**：深度审查 `gqa_backend_wrap.py` 实际拦截点
+- **发现**：`wrap_attn_backend()` 只重写 `_forward_encoder_attention`，该方法在 vLLM V1 的 rocm_attn.py、flash_attn.py、triton_attn.py 中**仅在 `AttentionType.ENCODER_ONLY` / `ENCODER` / `ENCODER_DECODER` 时调用**。Qwen3.5-27B 是 decoder-only，全部层用 `AttentionType.DECODER`，不经过此路径。
+- **预期效果**：无（已经不影响 Decode）
+- **实测结果**：未上机（源码分析已确认为死代码路径）。真正 Decode 走 `RocmAttentionImpl.forward()` → `chunked_prefill_paged_decode()` → PagedAttention kernel，已原生接收 `num_kv_heads` 参数。
+- **→ 冻结。代码保留，不再投入。**
+
+#### HIP Graph — 物理分析 + S2b 实测证伪
+
+- **改动**：审查 `hip_graph.py` + `exec_path.py` 实际工作状态 + DCU decode 物理瓶颈分析
+- **发现**：
+  1. 代码层面：`hip_graph.py` 从未调用 `capture_graph()`，`_graphs` 字典始终为空。当前 wrapper 只加开销无任何收益（骨架代码）。
+  2. 物理层面：DCU decode 权重 IO 占 95%（54GB bf16 ÷ 1.2TB/s HBM = 45ms/token），kernel launch overhead 仅 ~2ms（<3%）。HIP Graph 最佳收益 = 消除 2ms → +2.8% 吞吐 ≈ +0.34 tok/s，不到 go/no-go 门槛（+0.5）。
+  3. 历史实测：S2b `ENFORCE_EAGER=0`（原生 vLLM CUDA/HIP Graph）vs `ENFORCE_EAGER=1` → 12.17 vs 12.19 tok/s（噪声级）。
+- **预期效果**：+0.34 tok/s（理论上限）
+- **实测结果**：原生 Graph 已证伪（+0.02 tok/s 噪声）；自研捕获实现无意义。
+- **→ 冻结。不实现真实 capture。代码保留，ENFORCE_EAGER=1 保持。**
+
+#### KV FP8 — 历史实测全档倒退
+
+- **改动**：重新评估 KV FP8 对 16-32K HBM IO 缩减的理论收益 vs 历史实测数据
+- **理论**：32K 时 KV 读占 28.6ms → FP8 减至 14.3ms（-19% TPOT）
+- **实测**（2026-07-09，`--kv-cache-dtype fp8`，原生 vLLM，非 FDU hooks）：
+  - 4-8K：12.21 → **10.65 tok/s（-12.8%）**，TTFT P99 4546 → **26627ms（崩溃）**
+  - 8-16K：7.24 → **7.10 tok/s（-1.9%）**
+  - 16-32K：3.22 → **2.90 tok/s（-9.9%）**
+- **预期效果**：16-32K TPOT 降 ~19%（理论）
+- **实测结果**：全档倒退。ROCm fp8 attention 路径未优化，量化/反量化开销超过 KV 带宽节省。
+- **→ 冻结。不开 KV FP8。FDU_ENABLE_KV_QUANT=0 保持。**
+
+#### 物理根源总结
+
+DCU decode 瓶颈 = 54GB bf16 模型权重 HBM 搬移（~45ms/token，占 95%）。
+任何不减少模型权重 HBM IO 的优化（Graph/GQA/scheduler/KV quant）都无法显著改善 TPOT。
+唯一合规的权重 IO 缩减手段（INT4 权重量化）属于"持久化量化"→ 违规。
+
+#### S1 recover 回归
+
+- `launch.sh` 保持 S1 默认：stock api_server, GPU 0.94, ENFORCE_EAGER=1, DO_WARMUP=0
+- `CLAUDE.md` 更新：Phase2 证伪表 + S1 recover 行动清单
+- 计划从 Phase2 冲刺切换为 S1 recover：确认配置 → 可选单档 warmup A/B → 平台提交 → 7/15 截止
+
 ## [v0.2.14] - 2026-07-11
 
 ### 少次多阶段冲刺落地（S1–S4 + Phase2 三板）
