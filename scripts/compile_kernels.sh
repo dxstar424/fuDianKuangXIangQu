@@ -34,6 +34,7 @@ mkdir -p "$BUILD_DIR"
 # --- 编译每个 kernel 源文件 ---
 KERNELS=(
     "dcu_flash_attn"
+    "dcu_flash_attn_prefill"
 )
 
 for kernel in "${KERNELS[@]}"; do

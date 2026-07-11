@@ -19,6 +19,7 @@
 | `FDU_ENABLE_PREFIX_CACHE` | `1` | `1` | Prefix 缓存 |
 | `FDU_ENABLE_GQA_OPT` | `0` | **`1`** | GQA selector wrap（已接线） |
 | `FDU_ENABLE_HIP_GRAPH` | `0` | `0` | 仅 S4；须 `ENFORCE_EAGER=0` |
+| `FDU_ENABLE_FLASH_ATTN` | `0` | **`1`** | HIP FlashAttention prefill kernel（v0.2.19+） |
 
 ## 启动参数（launch.sh · S1 Recover）
 

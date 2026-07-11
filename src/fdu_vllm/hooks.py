@@ -91,6 +91,15 @@ def activate() -> None:
         except Exception as e:
             logger.warning("GQA selector patch early-fail: %s", e)
 
+    # HIP FlashAttention prefill backend
+    if cfg.enable_flash_attn:
+        try:
+            from fdu_vllm.flash_attn_backend import install_flash_attn_backend
+
+            install_flash_attn_backend()
+        except Exception as e:
+            logger.warning("FlashAttn backend install failed: %s", e)
+
     if cfg.attention_backend in ("dcu_optimized", "flash_attn"):
         from fdu_vllm.attention import install_attention_hooks
 
