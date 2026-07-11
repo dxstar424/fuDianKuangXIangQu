@@ -20,8 +20,8 @@ export HSA_OVERRIDE_GFX_VERSION
 # ── CSDN 文章优化：DCU 特定 tuning ──
 # BLAS: 小 batch decode (M=1 GEMV) 走 rocBLAS 常比 hipBLASLt 快
 export TORCH_BLAS_PREFER_HIPBLASLT="${TORCH_BLAS_PREFER_HIPBLASLT:-0}"
-# aiter: 部分 gfx9 架构开了反慢，先关
-export VLLM_ROCM_USE_AITER="${VLLM_ROCM_USE_AITER:-0}"
+# aiter: v0.3.0 开（FP8 W8A8 GEMM 走 AITER Triton BMM），无 FP8 时可按需关
+export VLLM_ROCM_USE_AITER="${VLLM_ROCM_USE_AITER:-1}"
 # attention 走 Triton（DCU 默认最优路径）
 export VLLM_USE_TRITON_FLASH_ATTN="${VLLM_USE_TRITON_FLASH_ATTN:-1}"
 # safetensors 快速搬运到显存

@@ -1,5 +1,29 @@
 # 变更日志
 
+## [v0.3.0] - 2026-07-11
+
+### FP8 在线权重量化（W8A8）— 60 → 88 分冲刺
+
+**物理依据**（`doc/大模型decode访存瓶颈与双缓冲_DCU实测(1).html`）：
+- DCU decode = 95% 权重 HBM IO（54GB bf16 ÷ 1.2TB/s = 45ms/token），计算仅用 0.3% 算力
+- 双缓冲实测 ±1.5%（已撞带宽墙），唯一出路：减少搬运字节（量化）
+- 原文结论："这就是我们把 TPOT 从 ~49ms 压到 ~40ms 的主武器"
+
+**改动**：
+- `launch.sh`：新增 `ENABLE_FP8_WEIGHT_QUANT=1`，添加 `--quantization fp8` 到 vLLM CLI
+- `scripts/rocm_env.sh`：`VLLM_ROCM_USE_AITER=1`（FP8 W8A8 GEMM 走 AITER Triton BMM）
+- `Dockerfile`：同步 `VLLM_ROCM_USE_AITER=1` + `ENABLE_FP8_WEIGHT_QUANT=1`
+- `config.yaml`：新增 `fp8_weight_quant` 配置节
+- `docs/env_vars.md`：文档化 `ENABLE_FP8_WEIGHT_QUANT`、`VLLM_ROCM_USE_AITER`、`VLLM_ROCM_USE_SKINNY_GEMM`
+
+**技术路径**：vLLM 内置 `Fp8OnlineLinearMethod`
+— 加载 bf16 权重 → `ops.scaled_fp8_quant()` 在线量化到 FP8 FNUZ → 存储 `weight`(FP8 27GB) + `weight_scale`
+— Forward: per-token 激活量化 → W8A8 FP8 GEMM (AITER Triton BMM / `torch._scaled_mm`)
+— 预期权重 HBM IO: 45ms → 22.5ms (-50%)，8-16K 吞吐 ~18-20 tok/s → 平台分 ~85-90
+
+**预期效果**：8-16K 吞吐 2×，总分 85-90。
+**实测结果**：待 SCNet 验证 + 平台提交。
+
 ## [v0.2.15] - 2026-07-11
 
 ### Phase2 三板全部证伪 → 回归 S1 recover

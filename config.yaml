@@ -23,6 +23,11 @@ attention:
   num_kv_heads: 32                 # Qwen3.5-27B GQA
   num_q_heads: 64
 
+# --- FP8 在线权重量化（v0.3.0+）---
+fp8_weight_quant:
+  enabled: true                     # 启用 W8A8 在线权重量化
+  activation_scheme: "dynamic"      # per-token 动态激活量化
+
 # --- 执行路径（不触碰 batch scheduler）---
 executor:
   enable_prefix_caching: true      # Phase 1 必开

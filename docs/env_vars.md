@@ -20,6 +20,7 @@
 | `FDU_ENABLE_GQA_OPT` | `0` | **`1`** | GQA selector wrap（已接线） |
 | `FDU_ENABLE_HIP_GRAPH` | `0` | `0` | 仅 S4；须 `ENFORCE_EAGER=0` |
 | `FDU_ENABLE_FLASH_ATTN` | `0` | **`1`** | HIP FlashAttention prefill kernel（v0.2.19+） |
+| `ENABLE_FP8_WEIGHT_QUANT` | **`1`** | **`1`** | **v0.3.0** FP8 W8A8 在线权重量化（权重 HBM IO 减半） |
 
 ## 启动参数（launch.sh · S1 Recover）
 
@@ -34,6 +35,7 @@
 | `ENABLE_PREFIX_CACHING` | `1` | prefix caching | 低风险 |
 | `USE_FDU_SERVER` | **`0`** | `1`=fdu_vllm.server | S1/S2 stock；**S3 起用 1** |
 | `ENFORCE_EAGER` | **`1`** | `--enforce-eager` | S2 可 A/B 关 |
+| `ENABLE_FP8_WEIGHT_QUANT` | **`1`** | v0.3.0 FP8 W8A8 在线权重量化 | 权重 HBM IO 减半 (45ms→22.5ms) |
 | `HEALTH_TIMEOUT` | `900` | 健康检查超时 | 大模型加载慢 |
 
 ## ROCm/DCU（scripts/rocm_env.sh）
@@ -47,6 +49,8 @@
 | `PYTORCH_HIP_ALLOC_CONF` | `expandable_segments:True` | 显存分配 |
 | `HIPCC_COMPILE_FLAGS_APPEND` | `-O3` | vLLM 编译优化 |
 | `GPU_ARCH` | 自动 | hipcc `--offload-arch` |
+| `VLLM_ROCM_USE_AITER` | **`1`** | v0.3.0 开（FP8 W8A8 GEMM 走 AITER Triton BMM） |
+| `VLLM_ROCM_USE_SKINNY_GEMM` | `1` | ROCm FP8 scaled_mm kernel（decode skinny GEMM） |
 
 ## 已移除（违规/无效）
 

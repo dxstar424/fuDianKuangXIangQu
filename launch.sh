@@ -59,6 +59,8 @@ ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
 COMPILATION_CONFIG="${COMPILATION_CONFIG:-{\"cudagraph_mode\": 3, \"cudagraph_capture_sizes\": [1]}}"
 # 权重加载：runai_streamer 比 auto 快 ~8min
 LOAD_FORMAT="${LOAD_FORMAT:-runai_streamer}"
+# FP8 在线权重量化：bf16→FP8 W8A8（权重 HBM IO 减半，v0.3.0+）
+ENABLE_FP8_WEIGHT_QUANT="${ENABLE_FP8_WEIGHT_QUANT:-1}"
 
 export GPU_MEMORY_UTILIZATION
 export MODEL_PATH
@@ -94,6 +96,10 @@ if [[ "${ENFORCE_EAGER}" == "1" ]]; then
     VLLM_ARGS+=(--enforce-eager)
 fi
 
+if [[ "${ENABLE_FP8_WEIGHT_QUANT}" == "1" ]]; then
+    VLLM_ARGS+=(--quantization fp8)
+fi
+
 _log_config() {
     echo "[launch] === recovery config (post 59.97) ==="
     echo "[launch]   model: ${MODEL_PATH}"
@@ -103,6 +109,7 @@ _log_config() {
     echo "[launch]   prefix=${ENABLE_PREFIX_CACHING}/${FDU_ENABLE_PREFIX_CACHE}"
     echo "[launch]   USE_FDU_SERVER=${USE_FDU_SERVER}  (0=stock api_server)"
     echo "[launch]   ENFORCE_EAGER=${ENFORCE_EAGER}"
+    echo "[launch]   FP8_WEIGHT_QUANT=${ENABLE_FP8_WEIGHT_QUANT}  (W8A8 online)"
     echo "[launch]   locked: max-num-seqs=${MAX_NUM_SEQS}"
     echo "[launch] ====================================="
 }
