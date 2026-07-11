@@ -45,7 +45,7 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-256}"
 
-# ── v0.2.18 实验 C：GPU 0.95 + warmup + graph + FULL_DECODE_ONLY ──
+# ── v0.2.19 实验 D：CSDN 文章全部优化落地 ──
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-1}"
 DO_WARMUP="${DO_WARMUP:-1}"
@@ -56,7 +56,9 @@ USE_FDU_SERVER="${USE_FDU_SERVER:-0}"
 # 0=开原生 HIP Graph；1=强制 eager
 ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
 # FULL_DECODE_ONLY: decode用FULL graph, prefill用eager
-COMPILATION_CONFIG="${COMPILATION_CONFIG:-{\"cudagraph_mode\": 3}}"
+COMPILATION_CONFIG="${COMPILATION_CONFIG:-{\"cudagraph_mode\": 3, \"cudagraph_capture_sizes\": [1]}}"
+# 权重加载：runai_streamer 比 auto 快 ~8min
+LOAD_FORMAT="${LOAD_FORMAT:-runai_streamer}"
 
 export GPU_MEMORY_UTILIZATION
 export MODEL_PATH
@@ -80,6 +82,7 @@ VLLM_ARGS=(
     --served-model-name Qwen3.5-27B
     --no-enable-log-requests
     --disable-log-stats
+    --load-format "${LOAD_FORMAT}"
     --compilation-config "${COMPILATION_CONFIG}"
 )
 

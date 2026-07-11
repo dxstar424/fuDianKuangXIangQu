@@ -11,7 +11,7 @@ phase: 1
 kv_cache:
   strategy: "none"                 # 保持 none；defrag 未接线勿开
   block_size: 16
-  gpu_memory_utilization: 0.95     # v0.2.18 C: 0.95 + warmup 16-32K + FULL_DECODE_ONLY graph
+  gpu_memory_utilization: 0.95     # v0.2.19 D: CSDN全部优化 + rocBLAS + aiter=off
   enable_kv_quant: false           # 默认关，保精度系数
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7

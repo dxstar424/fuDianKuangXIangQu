@@ -17,6 +17,7 @@ WORKDIR /workspace
 
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
+RUN pip install --no-cache-dir runai-model-streamer || echo "[FDU] runai_streamer skipped (non-fatal)"
 
 COPY src/ ./src/
 COPY patches/ ./patches/
@@ -42,5 +43,9 @@ ENV DO_WARMUP=1
 ENV WARMUP_TIER=16-32K
 ENV ENFORCE_EAGER=0
 ENV USE_FDU_SERVER=0
-ENV WARMUP_TIER=8-16K
+ENV VLLM_ROCM_USE_AITER=0
+ENV TORCH_BLAS_PREFER_HIPBLASLT=0
+ENV VLLM_USE_TRITON_FLASH_ATTN=1
+ENV SAFETENSORS_FAST_GPU=1
+ENV LOAD_FORMAT=runai_streamer
 CMD ["bash", "launch.sh"]
