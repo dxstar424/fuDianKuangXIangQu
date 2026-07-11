@@ -45,16 +45,18 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-256}"
 
-# ── v0.2.17 实验 B：GPU 0.95 + warmup + native graph ──
+# ── v0.2.18 实验 C：GPU 0.95 + warmup + graph + FULL_DECODE_ONLY ──
 GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
 ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-1}"
 DO_WARMUP="${DO_WARMUP:-1}"
-WARMUP_ROUNDS="${WARMUP_ROUNDS:-1}"
-WARMUP_TIER="${WARMUP_TIER:-8-16K}"
+WARMUP_ROUNDS="${WARMUP_ROUNDS:-2}"
+WARMUP_TIER="${WARMUP_TIER:-16-32K}"
 # 0=stock api_server（推荐）；1=fdu_vllm.server（仅本地验证后）
 USE_FDU_SERVER="${USE_FDU_SERVER:-0}"
-# 0=开原生 HIP Graph（平台测）；1=强制 eager
+# 0=开原生 HIP Graph；1=强制 eager
 ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
+# FULL_DECODE_ONLY: decode用FULL graph, prefill用eager
+COMPILATION_CONFIG="${COMPILATION_CONFIG:-{\"cudagraph_mode\": 3}}"
 
 export GPU_MEMORY_UTILIZATION
 export MODEL_PATH
@@ -78,6 +80,7 @@ VLLM_ARGS=(
     --served-model-name Qwen3.5-27B
     --no-enable-log-requests
     --disable-log-stats
+    --compilation-config "${COMPILATION_CONFIG}"
 )
 
 if [[ "${ENABLE_PREFIX_CACHING}" == "1" ]] && [[ "${FDU_ENABLE_PREFIX_CACHE}" == "1" ]]; then
