@@ -1,19 +1,18 @@
 #!/usr/bin/env bash
 # ============================================================
-# 评测启动脚本 — 去掉负优化（先超过官方 Baseline）
+# v0.4.0 激进冲刺 — 去掉 FP8 负优化 + 最大化系统配置
 #
-# 本队正式分：2026-07-10 lutinayi → 59.97（12.92/10.04/5.77）
-#   ≈ 接近官方 Baseline（公式约 60 分）；16-32K 低于 Baseline
-# 「富贵花开」84 分是他队，不是本队历史成绩
+# 历史：四轮实验 A-D 全部 ~60 分（含 --quantization fp8）。
+# DCU 讲义实测：FP8 量化在 prefill 是负优化（反量化开销 > 收益），
+# 这正是 16-32K 5.77 < baseline 7.75 的根因。
 #
-# 默认策略：
-#   - 入口：stock vllm api_server（不用 fdu_vllm.server）
-#   - GPU_MEMORY_UTILIZATION=0.94（禁止默认 0.95）
-#   - DO_WARMUP=0
-#   - prefix caching + 关日志
-#   - --enforce-eager
-#
-# 禁止改：max-model-len / max-num-seqs / max-num-batched-tokens / scheduler
+# v0.4.0 策略：
+#   - 完全移除 FP8 权重量化（最关键！）
+#   - GPU 0.97 激进显存（更大 KV cache pool）
+#   - cudagraph_mode=3 FULL_DECODE_ONLY + capture_sizes=[1,2,4,8]
+#   - BLAS 后端：rocBLAS decode + hipBLASLt prefill 由 TORCH_BLAS_PREFER_HIPBLASLT 控制
+#   - Triton FlashAttention prefill（vLLM V1 默认 TRITON_ATTN 后端）
+#   - warmup 全档（稳定 TTFT P99）
 # ============================================================
 set -euo pipefail
 
@@ -45,22 +44,19 @@ TENSOR_PARALLEL_SIZE="${TENSOR_PARALLEL_SIZE:-1}"
 MAX_MODEL_LEN="${MAX_MODEL_LEN:-32768}"
 MAX_NUM_SEQS="${MAX_NUM_SEQS:-256}"
 
-# ── v0.2.19 实验 D：CSDN 文章全部优化落地 ──
-GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.95}"
+# ── v0.4.0 激进冲刺配置 ──
+GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.97}"
 ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-1}"
 DO_WARMUP="${DO_WARMUP:-1}"
 WARMUP_ROUNDS="${WARMUP_ROUNDS:-2}"
-WARMUP_TIER="${WARMUP_TIER:-16-32K}"
-# 0=stock api_server（推荐）；1=fdu_vllm.server（仅本地验证后）
+WARMUP_TIER="${WARMUP_TIER:-all}"
 USE_FDU_SERVER="${USE_FDU_SERVER:-0}"
-# 0=开原生 HIP Graph；1=强制 eager
 ENFORCE_EAGER="${ENFORCE_EAGER:-0}"
-# FULL_DECODE_ONLY: decode用FULL graph, prefill用eager
-COMPILATION_CONFIG="${COMPILATION_CONFIG:-{\"cudagraph_mode\": 3, \"cudagraph_capture_sizes\": [1]}}"
-# 权重加载：runai_streamer 比 auto 快 ~8min
+# FULL_DECODE_ONLY: decode 图捕获, prefill 走 eager (最优安全配置)
+COMPILATION_CONFIG="${COMPILATION_CONFIG:-{\"cudagraph_mode\": 3, \"cudagraph_capture_sizes\": [1, 2, 4, 8]}}"
 LOAD_FORMAT="${LOAD_FORMAT:-runai_streamer}"
-# FP8 在线权重量化：bf16→FP8 W8A8（权重 HBM IO 减半，v0.3.0+）
-ENABLE_FP8_WEIGHT_QUANT="${ENABLE_FP8_WEIGHT_QUANT:-1}"
+# ★★★ 关 FP8 —— 这是 16-32K 倒退的根因 ★★★
+ENABLE_FP8_WEIGHT_QUANT="${ENABLE_FP8_WEIGHT_QUANT:-0}"
 
 export GPU_MEMORY_UTILIZATION
 export MODEL_PATH
@@ -86,6 +82,7 @@ VLLM_ARGS=(
     --disable-log-stats
     --load-format "${LOAD_FORMAT}"
     --compilation-config "${COMPILATION_CONFIG}"
+    --block-size 32
 )
 
 if [[ "${ENABLE_PREFIX_CACHING}" == "1" ]] && [[ "${FDU_ENABLE_PREFIX_CACHE}" == "1" ]]; then
@@ -96,21 +93,19 @@ if [[ "${ENFORCE_EAGER}" == "1" ]]; then
     VLLM_ARGS+=(--enforce-eager)
 fi
 
-if [[ "${ENABLE_FP8_WEIGHT_QUANT}" == "1" ]]; then
-    VLLM_ARGS+=(--quantization fp8)
-fi
+# ★ v0.4.0: 不再传 --quantization fp8 ★
 
 _log_config() {
-    echo "[launch] === recovery config (post 59.97) ==="
+    echo "[launch] === v0.4.0 aggressive (NO FP8) ==="
     echo "[launch]   model: ${MODEL_PATH}"
     echo "[launch]   port:  ${PORT}"
-    echo "[launch]   GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}  (NOT 0.95)"
+    echo "[launch]   GPU_MEMORY_UTILIZATION=${GPU_MEMORY_UTILIZATION}"
     echo "[launch]   DO_WARMUP=${DO_WARMUP} TIER=${WARMUP_TIER}"
     echo "[launch]   prefix=${ENABLE_PREFIX_CACHING}/${FDU_ENABLE_PREFIX_CACHE}"
-    echo "[launch]   USE_FDU_SERVER=${USE_FDU_SERVER}  (0=stock api_server)"
     echo "[launch]   ENFORCE_EAGER=${ENFORCE_EAGER}"
-    echo "[launch]   FP8_WEIGHT_QUANT=${ENABLE_FP8_WEIGHT_QUANT}  (W8A8 online)"
-    echo "[launch]   locked: max-num-seqs=${MAX_NUM_SEQS}"
+    echo "[launch]   FP8_WEIGHT_QUANT=${ENABLE_FP8_WEIGHT_QUANT}  (OFF=关键!)"
+    echo "[launch]   compilation=${COMPILATION_CONFIG}"
+    echo "[launch]   block_size=32 (大块=少页表开销)"
     echo "[launch] ====================================="
 }
 

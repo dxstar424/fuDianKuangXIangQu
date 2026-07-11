@@ -1,57 +1,71 @@
 # 环境变量说明（评测提交必填）
 
-> 冲刺阶段配额见 [sprint_strategy_0711.md](./sprint_strategy_0711.md)
+> v0.4.0 激进冲刺：去 FP8 + 最大化系统配置
 
 ## Phase 阶段
 
 | 变量名 | 默认 | 作用 |
 |--------|------|------|
-| `FDU_PHASE` | `1` | `1`=仅 launch/ROCm（S1/S2）；`2`=启用 GQA 等钩子（S3+） |
+| `FDU_PHASE` | `1` | `1`=仅 launch/ROCm；`2`=启用 GQA 等钩子 |
 
 ## FDU 优化开关
 
-| 变量名 | Phase 1 / S1 | Phase 2 / S3 | 作用 |
-|--------|--------------|--------------|------|
-| `FDU_ENABLE` | `1` | `1` | 总开关 |
-| `FDU_KV_CACHE_STRATEGY` | `none` | **`none`** | defrag **未接线**，保持 none |
-| `FDU_ATTENTION_BACKEND` | `vllm_default` | `vllm_default` | GQA wrap stock selector |
-| `FDU_ENABLE_KV_QUANT` | `0` | `0` | KV FP8 默认关 |
-| `FDU_ENABLE_PREFIX_CACHE` | `1` | `1` | Prefix 缓存 |
-| `FDU_ENABLE_GQA_OPT` | `0` | **`1`** | GQA selector wrap（已接线） |
-| `FDU_ENABLE_HIP_GRAPH` | `0` | `0` | 仅 S4；须 `ENFORCE_EAGER=0` |
-| `FDU_ENABLE_FLASH_ATTN` | `0` | **`1`** | HIP FlashAttention prefill kernel（v0.2.19+） |
-| `ENABLE_FP8_WEIGHT_QUANT` | **`1`** | **`1`** | **v0.3.0** FP8 W8A8 在线权重量化（权重 HBM IO 减半） |
+| 变量名 | v0.4.0 | 作用 |
+|--------|--------|------|
+| `FDU_ENABLE` | `1` | 总开关 |
+| `FDU_KV_CACHE_STRATEGY` | `none` | defrag 未接线，保持 none |
+| `FDU_ATTENTION_BACKEND` | `vllm_default` | 走 vLLM 原生后端选择 |
+| `FDU_ENABLE_KV_QUANT` | `0` | KV FP8 关 |
+| `FDU_ENABLE_PREFIX_CACHE` | `1` | Prefix 缓存 |
+| `FDU_ENABLE_GQA_OPT` | `0` | GQA wrap（已证实为死代码路径） |
+| `FDU_ENABLE_HIP_GRAPH` | `0` | 不启用（vLLM 原生 HIP Graph 已由 cudagraph_mode 控制） |
+| `ENABLE_FP8_WEIGHT_QUANT` | **`0`** | ★ 关 FP8 权重量化——v0.4.0 最关键改动 |
 
-## 启动参数（launch.sh · S1 Recover）
-
-| 变量名 | 默认 | 说明 | 配置原因 |
-|--------|------|------|----------|
-| `MODEL_PATH` | 自动：`/root`→`/data`→`$HOME` | 模型路径 | SCNet `/root` 加载更快 |
-| `PORT` | `8000` | 服务端口 | 评测机默认 |
-| `GPU_MEMORY_UTILIZATION` | **`0.94`** | 显存利用率 | **禁止默认 0.95** |
-| `DO_WARMUP` | **`0`** | 启动 warmup | 平台默认关；S2 可试 |
-| `WARMUP_ROUNDS` | `1` | warmup 轮数 | — |
-| `WARMUP_TIER` | `8-16K` | warmup 档位 | 仅 DO_WARMUP=1 |
-| `ENABLE_PREFIX_CACHING` | `1` | prefix caching | 低风险 |
-| `USE_FDU_SERVER` | **`0`** | `1`=fdu_vllm.server | S1/S2 stock；**S3 起用 1** |
-| `ENFORCE_EAGER` | **`1`** | `--enforce-eager` | S2 可 A/B 关 |
-| `ENABLE_FP8_WEIGHT_QUANT` | **`1`** | v0.3.0 FP8 W8A8 在线权重量化 | 权重 HBM IO 减半 (45ms→22.5ms) |
-| `HEALTH_TIMEOUT` | `900` | 健康检查超时 | 大模型加载慢 |
-
-## ROCm/DCU（scripts/rocm_env.sh）
+## 启动参数（launch.sh · v0.4.0）
 
 | 变量名 | 默认 | 说明 |
 |--------|------|------|
-| `HIP_PLATFORM` | `amd` | HIP 平台 |
+| `MODEL_PATH` | 自动检测 | 模型路径 |
+| `PORT` | `8000` | 服务端口 |
+| `GPU_MEMORY_UTILIZATION` | **`0.97`** | ★ 激进显存（更大 KV cache 池） |
+| `DO_WARMUP` | **`1`** | 启动 warmup |
+| `WARMUP_ROUNDS` | `2` | warmup 轮数 |
+| `WARMUP_TIER` | **`all`** | 全档 warmup（稳 TTFT P99） |
+| `ENABLE_PREFIX_CACHING` | `1` | prefix caching |
+| `USE_FDU_SERVER` | `0` | stock api_server |
+| `ENFORCE_EAGER` | `0` | ★ 不强制 eager（让 vLLM 用原生 HIP Graph） |
+| `COMPILATION_CONFIG` | `{"cudagraph_mode": 3, "cudagraph_capture_sizes": [1, 2, 4, 8]}` | FULL_DECODE_ONLY + 小 batch 图捕获 |
+| `LOAD_FORMAT` | `runai_streamer` | 流式快速加载 |
+| `HEALTH_TIMEOUT` | `900` | 健康检查超时 |
+
+## ROCm/DCU 系统优化（scripts/rocm_env.sh）
+
+| 变量名 | v0.4.0 | 说明 |
+|--------|--------|------|
+| `HSA_OVERRIDE_GFX_VERSION` | `9.4.2` | gfx942 kernel 选择 |
 | `HIP_VISIBLE_DEVICES` | `0` | 可见 DCU |
-| `GPU_MAX_HW_QUEUES` | `2` | 硬件队列 |
+| `PYTORCH_HIP_ALLOC_CONF` | `expandable_segments:True` | 缓解显存碎片 |
 | `HSA_ENABLE_SDMA` | `1` | 异步 SDMA |
-| `PYTORCH_HIP_ALLOC_CONF` | `expandable_segments:True` | 显存分配 |
-| `HIPCC_COMPILE_FLAGS_APPEND` | `-O3` | vLLM 编译优化 |
-| `GPU_ARCH` | 自动 | hipcc `--offload-arch` |
-| `VLLM_ROCM_USE_AITER` | **`1`** | v0.3.0 开（FP8 W8A8 GEMM 走 AITER Triton BMM） |
-| `VLLM_ROCM_USE_SKINNY_GEMM` | `1` | ROCm FP8 scaled_mm kernel（decode skinny GEMM） |
+| `GPU_MAX_HW_QUEUES` | `2` | 硬件队列数 |
+| `HIP_FORCE_DEV_KERNARG` | `1` | kernel 参数直传 |
+| `TORCH_BLAS_PREFER_HIPBLASLT` | **`0`** | ★ 走 rocBLAS（decode GEMV 更快） |
+| `VLLM_ROCM_USE_AITER` | **`0`** | ★★ 关 AITER（无 FP8 时不需要） |
+| `VLLM_ROCM_USE_AITER_RMSNORM` | **`1`** | 开 AITER RMSNorm（纯 bf16 加速） |
+| `VLLM_ROCM_USE_SKINNY_GEMM` | **`1`** | ★ decode GEMV 手写 HIP kernel（wvSplitK） |
+| `SAFETENSORS_FAST_GPU` | `1` | safetensors 快速搬运 |
+| `ROCBLAS_LAYER` | **`4`** | rocBLAS 内部自动调优 |
+| `MIOPEN_FIND_MODE` | **`1`** | MIOpen 自动寻找最优算法 |
+| `HIP_LAUNCH_BLOCKING` | `0` | 异步 kernel launch |
 
-## 已移除（违规/无效）
+## vLLM CLI 新增参数（v0.4.0）
 
-- `FDU_SCHEDULER_POLICY` — 赛题禁止修改 batch scheduler；并发=1 无收益
+| 参数 | 值 | 说明 |
+|------|-----|------|
+| `--block-size` | **`32`** | ★ 页表块大小加倍（16→32），减少 32K 长序列页表遍历开销 |
+| `--compilation-config` | `cudagraph_mode=3` | FULL_DECODE_ONLY（decode 图捕获，prefill eager） |
+
+## 已移除
+
+- `ENABLE_FP8_WEIGHT_QUANT=1` + `--quantization fp8` → 16-32K 倒退的根因
+- `VLLM_USE_TRITON_FLASH_ATTN` → 非 vLLM 原生 env var，无效 cargo cult 配置
+- `VLLM_ROCM_USE_AITER=1` → FP8 GEMM 后端，无 FP8 时不需要

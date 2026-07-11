@@ -5,12 +5,12 @@
 export FDU_PHASE="${FDU_PHASE:-1}"
 
 # ── 1.1 显存利用率 ──
-export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.94}"
+export GPU_MEMORY_UTILIZATION="${GPU_MEMORY_UTILIZATION:-0.97}"
 
-# ── 1.2 分档 warmup（平台默认关；SCNet 可 DO_WARMUP=1）──
-export DO_WARMUP="${DO_WARMUP:-0}"
-export WARMUP_ROUNDS="${WARMUP_ROUNDS:-1}"
-export WARMUP_TIER="${WARMUP_TIER:-8-16K}"
+# ── 1.2 分档 warmup ──
+export DO_WARMUP="${DO_WARMUP:-1}"
+export WARMUP_ROUNDS="${WARMUP_ROUNDS:-2}"
+export WARMUP_TIER="${WARMUP_TIER:-all}"
 
 # ── 1.3 prefix caching ──
 export ENABLE_PREFIX_CACHING="${ENABLE_PREFIX_CACHING:-1}"

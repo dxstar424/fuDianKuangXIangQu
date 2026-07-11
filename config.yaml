@@ -10,9 +10,9 @@ phase: 1
 # --- KV Cache 管理 ---
 kv_cache:
   strategy: "none"                 # 保持 none；defrag 未接线勿开
-  block_size: 16
-  gpu_memory_utilization: 0.95     # v0.2.19 D: CSDN全部优化 + rocBLAS + aiter=off
-  enable_kv_quant: false           # 默认关，保精度系数
+  block_size: 32                   # v0.4.0: 32（减半页表，32K 长档友好）
+  gpu_memory_utilization: 0.97     # v0.4.0 激进：最大 KV cache 池
+  enable_kv_quant: false           # 关，保精度系数
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7
 
@@ -23,10 +23,9 @@ attention:
   num_kv_heads: 32                 # Qwen3.5-27B GQA
   num_q_heads: 64
 
-# --- FP8 在线权重量化（v0.3.0+）---
+# --- FP8 在线权重量化（v0.4.0 关闭：ROCm 上负优化）---
 fp8_weight_quant:
-  enabled: true                     # 启用 W8A8 在线权重量化
-  activation_scheme: "dynamic"      # per-token 动态激活量化
+  enabled: false                    # 关键！16-32K 倒退的根因
 
 # --- 执行路径（不触碰 batch scheduler）---
 executor:

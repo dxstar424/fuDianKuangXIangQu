@@ -1,5 +1,32 @@
 # 变更日志
 
+## [v0.4.0] - 2026-07-12
+
+### ★ 去 FP8 + 最大化系统优化（60 → 90 冲刺）
+
+**根因诊断**：
+- 四轮实验 A-D 全部 ~60 分，都启用了 `--quantization fp8`
+- DCU 讲义实测：FP8 量化在 prefill 是负优化（反量化开销 > 权重 IO 节省），"正是我们 down 量化拖累 16–32K 长档的原因"
+- 16-32K 5.77 < baseline 7.75（-26%）直接由 FP8 造成
+
+**v0.4.0 改动**：
+- `launch.sh`：`ENABLE_FP8_WEIGHT_QUANT=0`（关 FP8），移除 `--quantization fp8`
+- `launch.sh`：`GPU_MEMORY_UTILIZATION=0.97`（激进显存），`--block-size 32`（减半 32K 页表遍历）
+- `launch.sh`：`cudagraph_capture_sizes=[1,2,4,8]`（扩展 HIP Graph 覆盖）
+- `scripts/rocm_env.sh`：`VLLM_ROCM_USE_AITER=0`（关 FP8 GEMM 后端），`VLLM_ROCM_USE_SKINNY_GEMM=1`（确认 decode GEMV 走手写 HIP kernel）
+- `scripts/rocm_env.sh`：新增 `ROCBLAS_LAYER=4`、`MIOPEN_FIND_MODE=1`（ROCm 自调优）
+- `scripts/rocm_env.sh`：新增 `VLLM_ROCM_USE_AITER_RMSNORM=1`（纯 bf16 RMSNorm 加速）
+- `scripts/rocm_env.sh`：去掉 `VLLM_USE_TRITON_FLASH_ATTN`（cargo cult，非 vLLM 原生 env var）
+- `Dockerfile`：同步所有 env var 变更
+- `config.yaml`：`fp8_weight_quant.enabled=false`，`block_size=32`，`gpu=0.97`
+- `docs/env_vars.md`：v0.4.0 全量更新
+
+**预期效果**：
+- 16-32K：去掉 FP8 负优化 → 从 5.77 恢复到 >7.75 baseline，目标 10-12 tok/s
+- 8-16K：GPU 0.97 + block_size 32 + rocBLAS 自调优 → 目标 14-16 tok/s
+- 4-8K：无回归
+- 总分目标：75-85（保守）/ 85-90（激进）
+
 ## [v0.3.0] - 2026-07-11
 
 ### FP8 在线权重量化（W8A8）— 60 → 88 分冲刺
