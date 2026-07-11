@@ -12,6 +12,11 @@ export HSA_ENABLE_SDMA="${HSA_ENABLE_SDMA:-1}"
 export PYTORCH_HIP_ALLOC_CONF="${PYTORCH_HIP_ALLOC_CONF:-expandable_segments:True}"
 export HIP_FORCE_DEV_KERNARG="${HIP_FORCE_DEV_KERNARG:-1}"
 
+# HSA_OVERRIDE: 按实际架构填（rocminfo | grep gfx），填错算子崩溃
+# gfx942 → 9.4.2, gfx936 → 9.3.6, gfx90a → 9.0.0
+HSA_OVERRIDE_GFX_VERSION="${HSA_OVERRIDE_GFX_VERSION:-9.4.2}"
+export HSA_OVERRIDE_GFX_VERSION
+
 # ── CSDN 文章优化：DCU 特定 tuning ──
 # BLAS: 小 batch decode (M=1 GEMV) 走 rocBLAS 常比 hipBLASLt 快
 export TORCH_BLAS_PREFER_HIPBLASLT="${TORCH_BLAS_PREFER_HIPBLASLT:-0}"
