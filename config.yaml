@@ -11,7 +11,7 @@ phase: 1
 kv_cache:
   strategy: "none"                 # 保持 none；defrag 未接线勿开
   block_size: 16
-  gpu_memory_utilization: 0.92     # v0.2.16：降至 stock 基线值，优先 16-32K 纠负
+  gpu_memory_utilization: 0.95     # v0.2.17 B: 上探 0.95 + warmup + native graph
   enable_kv_quant: false           # 默认关，保精度系数
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7
@@ -26,7 +26,7 @@ attention:
 # --- 执行路径（不触碰 batch scheduler）---
 executor:
   enable_prefix_caching: true      # Phase 1 必开
-  use_cuda_graph: false            # 自研 HIP Graph 默认关；S1 另用 ENFORCE_EAGER=1
+  use_cuda_graph: true             # v0.2.17 B: 开原生 HIP Graph
   cuda_graph_max_bs: 1             # 并发=1
 
 # --- 精度门禁 ---
