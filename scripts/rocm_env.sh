@@ -1,5 +1,5 @@
 #!/bin/bash
-# v0.6.0 FINAL: 强制 FLASH_ATTN (AITER HIP CK kernel) + 全部系统优化
+# v0.7.0: INT4 AWQ + AITER HIP FlashAttention
 _ROCM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── DCU 设备 ──
@@ -20,6 +20,9 @@ export VLLM_ROCM_USE_AITER=1
 export VLLM_ROCM_USE_SKINNY_GEMM="${VLLM_ROCM_USE_SKINNY_GEMM:-1}"
 export VLLM_ROCM_USE_AITER_RMSNORM="${VLLM_ROCM_USE_AITER_RMSNORM:-1}"
 export TORCH_BLAS_PREFER_HIPBLASLT="${TORCH_BLAS_PREFER_HIPBLASLT:-0}"
+
+# ── ★★★ INT4 AWQ：强制 Triton 内核（ROCm 安全，避免 C++ kernel 兼容问题）★★★
+export VLLM_USE_TRITON_AWQ=1
 
 # ── ROCm 自调优 ──
 export ROCBLAS_LAYER="${ROCBLAS_LAYER:-4}"

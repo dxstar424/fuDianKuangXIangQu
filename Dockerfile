@@ -1,5 +1,5 @@
 # ============================================================
-# FDU SCCSCC26 — v0.6.0 FINAL: HIP FlashAttention
+# FDU SCCSCC26 — v0.7.0: INT4 AWQ + HIP FlashAttention
 # ============================================================
 
 ARG BASE_IMAGE=competition/vllm-0.18.1-base:v1.0
@@ -32,14 +32,16 @@ ARG ENABLE_VLLM_BUILD=0
 RUN if [ "$ENABLE_VLLM_BUILD" = "1" ]; then bash scripts/compile_vllm.sh; fi
 
 EXPOSE 8000
-# v0.6.0 FINAL: AITER=1, NO unified → FLASH_ATTN (HIP CK kernel)
+# v0.7.0: INT4 AWQ + AITER HIP FlashAttention
+# VLLM_USE_TRITON_AWQ=1 → 用 Triton AWQ dequant kernel（ROCm 安全）
 ENV VLLM_ROCM_USE_AITER=1
 ENV VLLM_ROCM_USE_SKINNY_GEMM=1
 ENV VLLM_ROCM_USE_AITER_RMSNORM=1
+ENV VLLM_USE_TRITON_AWQ=1
 ENV TORCH_BLAS_PREFER_HIPBLASLT=0
 ENV HSA_OVERRIDE_GFX_VERSION=9.4.2
 ENV HIP_VISIBLE_DEVICES=0
-ENV GPU_MEMORY_UTILIZATION=0.95
+ENV GPU_MEMORY_UTILIZATION=0.98
 ENV LOAD_FORMAT=runai_streamer
 ENV SAFETENSORS_FAST_GPU=1
 ENV ROCBLAS_LAYER=4

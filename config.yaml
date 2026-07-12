@@ -1,14 +1,22 @@
 # ============================================================
 # FDU SCCSCC26 - 可调参数声明（合规）
-# v0.5.0: AITER unified attention — 最简配置
+# v0.7.0: INT4 AWQ 权重量化 — 突破 60 分瓶颈
 # ============================================================
 
 phase: 1
 
+# v0.7.0: INT4 AWQ 权重 — 权重 HBM IO: 54GB→~14GB (3.75x 理论加速)
+weight_quantization:
+  enabled: true
+  method: "awq"
+  bits: 4
+  group_size: 128
+  model: "mattbucci/Qwen3.5-27B-AWQ"
+
 kv_cache:
   strategy: "none"
   block_size: 16
-  gpu_memory_utilization: 0.95
+  gpu_memory_utilization: 0.98
   enable_kv_quant: false
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7
@@ -23,9 +31,9 @@ fp8_weight_quant:
   enabled: false
 
 executor:
-  enable_prefix_caching: false
+  enable_prefix_caching: true
   use_cuda_graph: true
-  cuda_graph_max_bs: 1
+  cuda_graph_max_bs: 8
 
 precision:
   enforce_accuracy_check: true

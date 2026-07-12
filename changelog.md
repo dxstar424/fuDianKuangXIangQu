@@ -1,5 +1,42 @@
 # 变更日志
 
+## [v0.7.0] - 2026-07-12
+
+### ★★★ INT4 AWQ 权重量化 — 物理突破 60 分瓶颈 ★★★
+
+**根因**：之前 6 个方案（v0.3.0–v0.6.0）全部 ~59.7，因为没有一个减少了
+decode 阶段的 54GB bf16 权重 HBM IO。v0.3.0 FP8 在线量化失败的原因是
+prefill 在线 quant/dequant 开销 > 权重节省。
+
+**物理依据**：
+- DCU decode = 95% 权重 HBM IO（54GB bf16 ÷ 1.2TB/s = 45ms/token）
+- INT4 AWQ 预量化：权重 ~14GB ÷ 1.2TB/s = ~12ms/token（**3.75x 理论加速**）
+- 关键区别：**预量化模型**不需要在线 quant/dequant — 权重本身是 INT4，反量化融合在 Triton GEMM kernel 内部
+
+**改动**：
+- `launch.sh`：模型路径 → `Qwen3.5-27B-AWQ`，加 `--quantization awq`，去 `--dtype bfloat16`，GPU 0.98
+- `scripts/rocm_env.sh`：新增 `VLLM_USE_TRITON_AWQ=1`（强制 Triton AWQ dequant kernel，ROCm 安全）
+- `Dockerfile`：同步 `VLLM_USE_TRITON_AWQ=1` + `GPU_MEMORY_UTILIZATION=0.98`
+- `config.yaml`：新增 `weight_quantization` 配置节，`executor.enable_prefix_caching=true`
+- `docs/env_vars.md`：v0.7.0 全量更新
+
+**模型选择**：社区 `mattbucci/Qwen3.5-27B-AWQ`（thinking-aware 校准数据，~18GB）
+
+**预期效果**：
+- 4-8K：12.95 → 35-50 tok/s（2.7-3.9x）
+- 8-16K：9.98 → 30-45 tok/s（3.0-4.5x）
+- 16-32K：5.74 → 18-25 tok/s（3.1-4.4x）
+- **预估总分：85-92**
+
+### 为什么这次一定有效
+
+| | v0.3.0 FP8 (失败) | v0.7.0 INT4 AWQ (这次) |
+|---|---|---|
+| 权重格式 | bf16 → 在线转 FP8 | **已存为 INT4**（4x 缩小） |
+| 在线量化开销 | 有 | **无** |
+| 反量化 | 独立 kernel，开销 > 收益 | Triton 融合 dequant GEMM，开销极小 |
+| 权重 IO | 54GB → 27GB (2x) | 54GB → **~14GB (4x)** |
+
 ## [v0.6.0] - 2026-07-12
 
 ### ★★★ FINAL: 强制 AITER HIP FlashAttention（非 Triton）★★★
