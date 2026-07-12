@@ -1,20 +1,20 @@
 # ============================================================
 # FDU SCCSCC26 - 可调参数声明（合规）
-# v0.8.0: bitsandbytes INT4 在线量化 — 不依赖 CLI flag
+# v0.9.0: FP8 在线量化 — torch._scaled_mm ROCm HIP kernel
 # ============================================================
 
 phase: 1
 
-# v0.8.0: bnb INT4 在线量化 — bf16 权重在模型加载时自动转为 INT4
-# 策略：修改 vLLM 源码使 quantization 默认为 "bitsandbytes"
-#       平台评测机 CLI flag 覆盖无效 — 源码级默认值不可覆盖
+# v0.9.0: FP8 W8A8 在线量化 — bf16 权重在模型加载时转为 FP8
+# 策略：fdu_vllm/quant_force.py monkey-patch → quantization="fp8"
+#       torch._scaled_mm: ROCm 原生 HIP kernel（无需 on-the-fly 反量化）
+#       对比 v0.8.1 bitsandbytes: INT4 存储但 matmul_4bit 无 ROCm kernel
 weight_quantization:
   enabled: true
-  method: "bitsandbytes"
-  bits: 4
+  method: "fp8"
+  bits: 8
   compute_dtype: "bfloat16"
-  quant_type: "nf4"
-  mechanism: "vLLM source patch (config/model.py default changed)"
+  mechanism: "fdu_vllm monkey-patch → Fp8OnlineLinearMethod → torch._scaled_mm"
 
 kv_cache:
   strategy: "none"

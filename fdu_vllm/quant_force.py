@@ -1,5 +1,5 @@
 """
-v0.8.1: Monkey-patch vLLM ModelConfig to force bitsandbytes INT4 quantization.
+v0.9.0: Monkey-patch vLLM ModelConfig to force FP8 online quantization.
 
 This runs at vLLM import time (via vllm/__init__.py → fdu_vllm.activate()),
 BEFORE any model config is parsed. The platform CANNOT skip this hook.
@@ -7,6 +7,12 @@ BEFORE any model config is parsed. The platform CANNOT skip this hook.
 Unlike CLI flags (overridden by platform evaluator) or Dockerfile patches
 (may not be used by platform), this monkey-patch is guaranteed to execute
 as long as vLLM imports our fdu_vllm plugin — which it always does.
+
+FP8 W8A8 (vs v0.8.1 bitsandbytes INT4):
+  - torch._scaled_mm: ROCm 原生 HIP kernel, 不需要 on-the-fly 反量化
+  - Fp8OnlineLinearMethod: bf16 → FP8 在模型加载时量化
+  - 2x weight HBM IO reduction (FP8 8-bit vs bf16 16-bit)
+  - bitsandbytes 的 matmul_4bit 在 ROCm 上无 HIP 支持, 每次 forward 都做 CPU 反量化
 """
 
 from __future__ import annotations
@@ -20,10 +26,10 @@ _PATCHED = False
 
 
 def _patch_model_config() -> bool:
-    """Monkey-patch vllm.config.model.ModelConfig to force quantization='bitsandbytes'.
+    """Monkey-patch vllm.config.model.ModelConfig to force quantization='fp8'.
 
     The patch intercepts ModelConfig.__init__ to ensure quantization is always
-    set to 'bitsandbytes', regardless of CLI args or config files.
+    set to 'fp8', regardless of CLI args or config files.
 
     Returns True if patched successfully.
     """
@@ -38,15 +44,15 @@ def _patch_model_config() -> bool:
 
         @wraps(_original_init)
         def _patched_init(self, **kwargs):
-            # Force quantization before original init processes it
-            kwargs["quantization"] = "bitsandbytes"
+            # Force FP8 quantization before original init processes it
+            kwargs["quantization"] = "fp8"
             _original_init(self, **kwargs)
 
         ModelConfig.__init__ = _patched_init
         _PATCHED = True
         logger.info(
             "FDU quant_force: ModelConfig.__init__ patched — "
-            "quantization forced to 'bitsandbytes'"
+            "quantization forced to 'fp8'"
         )
         return True
 
