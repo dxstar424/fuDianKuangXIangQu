@@ -1,31 +1,28 @@
 """
-v1.0.0: Online AWQ INT4 quantization via weight iterator monkey-patch.
+v1.0.0: Online AWQ INT4 quantization — custom weight_loader approach.
 
-Intercepts DefaultModelLoader.get_all_weights() to on-the-fly quantize
-bf16 weights → AWQ INT4 format (packed int32 + scales). The existing
-AWQ Triton kernels (awq_gemm_triton, awq_dequantize_triton) handle the
-fused dequant+matmul forward pass.
-
-Strategy:
+Strategy (simplest possible — no process_weights_after_loading dependency):
   1. quant_force.py forces quantization="awq" + creates quant_config.json
-  2. This module wraps the weight iterator to intercept bf16 .weight entries
-  3. Each bf16 weight is quantized per-group-of-128 to 4-bit AWQ format
-  4. Yields qweight/qzeros/scales entries that vLLM's AWQ pipeline expects
-  5. AWQ Triton kernels (pure Triton, GPU-native) do fused dequant+matmul
+  2. This module patches AWQLinearMethod.create_weights to create a "weight"
+     param with a CUSTOM weight_loader that quantizes bf16→AWQ INT4 inline.
+  3. When vLLM loads the bf16 weight from safetensors, the custom loader:
+     a) Copies the bf16 data
+     b) Quantizes it to AWQ INT4 (per-group-128 asymmetric)
+     c) Registers qweight/qzeros/scales as nn.Parameters
+     d) Removes the temporary "weight" param
+  4. process_weights_after_loading is no-op'd (already done)
+  5. AWQ Triton kernels handle fused dequant+matmul on forward
 
-Why this works on gfx942:
-  - AWQ on ROCm uses Triton (VLLM_USE_TRITON_AWQ=1 forced by platform)
-  - Triton compiles to HIP on ROCm — no CUDA dependency
-  - Fused dequant+matmul in a single kernel → no intermediate HBM write
-  - 4x weight IO reduction (13.5GB vs 54GB) → 2-3x decode throughput
+Why this approach:
+  - No dependency on when process_weights_after_loading fires
+  - Quantization happens inline during weight loading (guaranteed to execute)
+  - Only affects AWQ-configured layers (no embedding/lm_head interference)
+  - Handles TP correctly (each shard's weight_loader called independently)
 """
 
 from __future__ import annotations
 
-import json
 import logging
-import os
-from pathlib import Path
 
 import torch
 
@@ -35,156 +32,135 @@ _PATCHED = False
 _GROUP_SIZE = 128
 
 
-def _create_quant_config(model_dir: str) -> Path:
-    """Create quant_config.json in model directory for AWQ config loading."""
-    cfg_path = Path(model_dir) / "quant_config.json"
-    cfg = {
-        "quant_method": "awq",
-        "bits": 4,
-        "group_size": _GROUP_SIZE,
-        "zero_point": True,
-    }
-    cfg_path.write_text(json.dumps(cfg))
-    logger.info("FDU awq: created %s → %s", cfg_path, cfg)
-    return cfg_path
+def _quantize_and_register(layer: torch.nn.Module, weight_bf16: torch.Tensor):
+    """Quantize loaded bf16 weight → AWQ INT4, register as layer params.
 
-
-def _quantize_weight(weight: torch.Tensor) -> tuple[torch.Tensor, torch.Tensor, torch.Tensor]:
-    """Quantize a single bf16/fp16 weight tensor to AWQ INT4 format.
+    Called from the custom weight_loader. At this point, weight_bf16 is
+    on the correct device, in the correct dtype, with TP sharding applied.
 
     Args:
-        weight: [N_out, K_in] linear weight (vLLM/PyTorch convention)
-
-    Returns:
-        qweight:  [K_in, N_out_padded//8] int32 (AWQ reverse-order packed)
-        scales:   [K_in_padded//128, N_out_padded] float16
-        qzeros:   [K_in_padded//128, N_out_padded//8] int32
+        layer: The linear layer module (e.g., q_proj)
+        weight_bf16: [N_out, K_in] bf16 weight (TP-sharded if applicable)
     """
-    N_out, K_in = weight.shape
+    N_out, K_in = weight_bf16.shape
     group_size = _GROUP_SIZE
+    num_groups = K_in // group_size
 
-    # --- Step 1: transpose to AWQ layout [K_in, N_out] ---
-    w = weight.t().contiguous()  # [K_in, N_out]
-
-    # --- Step 2: pad K_in to multiple of group_size ---
-    num_groups = (K_in + group_size - 1) // group_size
-    K_pad = num_groups * group_size
-    N_pad = ((N_out + 7) // 8) * 8  # pad N to multiple of 8
-
-    if K_pad > K_in or N_pad > N_out:
-        w_padded = torch.zeros(K_pad, N_pad, dtype=w.dtype, device=w.device)
-        w_padded[:K_in, :N_out] = w
-        w = w_padded
-    # --- Step 3: group-wise asymmetric quantization ---
-    # Reshape to [G, gs, N_pad]
-    w_groups = w.view(num_groups, group_size, N_pad)
+    # --- Quantize: per-group asymmetric INT4 ---
+    w = weight_bf16.t().contiguous()  # → [K_in, N_out]
+    w_groups = w.view(num_groups, group_size, N_out)
 
     w_min = w_groups.amin(dim=1, keepdim=True).to(torch.float32)  # [G, 1, N]
     w_max = w_groups.amax(dim=1, keepdim=True).to(torch.float32)  # [G, 1, N]
 
-    # Avoid division by zero
-    range_val = w_max - w_min
-    range_val = torch.where(range_val < 1e-9, torch.ones_like(range_val), range_val)
+    rng = w_max - w_min
+    rng = torch.where(rng < 1e-9, torch.ones_like(rng), rng)
 
-    scales_fp32 = range_val / 15.0
-    scales = scales_fp32.squeeze(1).to(torch.float16)  # [G, N_pad]
+    scales_fp32 = rng / 15.0
+    zp = torch.clamp(
+        torch.round(-w_min / scales_fp32), 0, 15
+    ).to(torch.int32)  # [G, 1, N]
 
-    zero_points = torch.round(-w_min / scales_fp32)
-    zero_points = torch.clamp(zero_points.squeeze(1), 0, 15).to(torch.int32)  # [G, N_pad]
+    # Quantize
+    q_float = w_groups.to(torch.float32) / scales_fp32 + zp
+    q = torch.clamp(torch.round(q_float), 0, 15).to(torch.uint8)  # [G, gs, N]
 
-    # Quantize: q = round(w / scale + zero_point), clamp [0, 15]
-    q_float = (
-        w_groups.to(torch.float32) / scales_fp32 + zero_points.unsqueeze(1)
-    )
-    q = torch.clamp(torch.round(q_float), 0, 15).to(torch.uint8)  # [G, gs, N_pad]
+    scales = scales_fp32.squeeze(1).to(weight_bf16.dtype)  # [G, N]
+    zp = zp.squeeze(1)  # [G, N]
 
-    # --- Step 4: reshape to [K_pad, N_pad] and pack into int32 ---
-    q = q.view(K_pad, N_pad)  # [K_pad, N_pad]
-    q = q.view(K_pad, N_pad // 8, 8)  # [K_pad, N_pad//8, 8]
+    # --- Pack into AWQ int32 format ---
+    q = q.view(K_in, N_out)  # [K, N]
+    q = q.view(K_in, N_out // 8, 8)  # [K, N/8, 8]
 
-    # AWQ reverse order: [0, 4, 1, 5, 2, 6, 3, 7]
-    # Corresponds to shifts: [0, 16, 4, 20, 8, 24, 12, 28]
+    # AWQ reverse order: [0,4,1,5,2,6,3,7]
     awq_order = torch.tensor([0, 4, 1, 5, 2, 6, 3, 7], device=q.device)
-    q = q[:, :, awq_order]  # reorder
+    q = q[:, :, awq_order]
 
-    # Pack: each 4-bit value shifted by (pos * 4) bits, summed into int32
     shifts = (torch.arange(8, device=q.device) * 4).to(torch.int32)
-    qweight = (q.to(torch.int32) << shifts).sum(dim=-1)  # [K_pad, N_pad//8]
+    qweight = (q.to(torch.int32) << shifts).sum(dim=-1)  # [K, N/8]
 
-    # --- Step 5: pack qzeros ---
-    # Zero points: [G, N_pad] → pack into [G, N_pad//8]
-    zp = zero_points.view(num_groups, N_pad // 8, 8)  # [G, N_pad//8, 8]
-    zp = zp[:, :, awq_order]  # reorder
-    qzeros = (zp.to(torch.int32) << shifts).sum(dim=-1)  # [G, N_pad//8]
+    # Pack zero points
+    zp_data = zp.view(num_groups, N_out // 8, 8)  # [G, N/8, 8]
+    zp_data = zp_data[:, :, awq_order]
+    qzeros = (zp_data.to(torch.int32) << shifts).sum(dim=-1)  # [G, N/8]
 
-    return qweight, scales, qzeros
+    # --- Remove temporary weight, register AWQ parameters ---
+    del layer.weight
 
-
-def _wrap_weights_iter(
-    weights_iter,
-    quant_prefixes: list[str] | None = None,
-):
-    """Wrap a weight iterator to on-the-fly quantize bf16 weights to AWQ INT4.
-
-    For each (name, tensor) from weights_iter:
-      - If name matches '*.weight' and is bf16/fp16 → quantize, yield AWQ entries
-      - If name is already AWQ format (*.qweight, *.scales, *.qzeros) → skip
-      - Otherwise → yield unchanged
-
-    This lets us feed bf16 safetensors data into vLLM's AWQ pipeline seamlessly.
-    """
-    for name, tensor in weights_iter:
-        # Skip already-quantized entries (shouldn't appear for bf16 model)
-        if name.endswith(".qweight") or name.endswith(".qzeros") or name.endswith(".scales"):
-            continue
-
-        # Intercept bf16/fp16 linear weights and quantize them
-        if name.endswith(".weight") and tensor.dtype in (torch.bfloat16, torch.float16):
-            prefix = name.rsplit(".weight", 1)[0]
-
-            try:
-                qweight, scales, qzeros = _quantize_weight(tensor)
-                yield (f"{prefix}.qweight", qweight)
-                yield (f"{prefix}.scales", scales)
-                yield (f"{prefix}.qzeros", qzeros)
-            except Exception as e:
-                logger.error("FDU awq: failed to quantize %s (shape=%s): %s", name, tensor.shape, e)
-                raise
-
-            del tensor  # free bf16 memory
-        else:
-            yield (name, tensor)
+    layer.register_parameter(
+        "qweight", torch.nn.Parameter(qweight, requires_grad=False)
+    )
+    layer.register_parameter(
+        "qzeros", torch.nn.Parameter(qzeros, requires_grad=False)
+    )
+    layer.register_parameter(
+        "scales", torch.nn.Parameter(scales, requires_grad=False)
+    )
 
 
-def _patch_default_loader():
-    """Monkey-patch DefaultModelLoader.get_all_weights to quantize on-the-fly."""
-    from vllm.model_executor.model_loader.default_loader import DefaultModelLoader
+def _activate_patches():
+    """Apply all AWQ online quantization monkey-patches."""
+    from vllm.model_executor.layers.quantization.awq import (
+        AWQConfig,
+        AWQLinearMethod,
+    )
 
-    _orig_get_all = DefaultModelLoader.get_all_weights
+    # --- Patch 1: AWQ create_weights → create "weight" with custom loader ---
+    _orig_create = AWQLinearMethod.create_weights
 
-    def _patched_get_all(self, model_config, model):
-        weights_iter = _orig_get_all(self, model_config, model)
-        return _wrap_weights_iter(weights_iter)
+    def _fdu_create_weights(self, layer, input_size_per_partition,
+                            output_partition_sizes, input_size, output_size,
+                            params_dtype, **extra):
+        """Create a temporary 'weight' param that triggers quantization on load."""
+        output_size_per_partition = sum(output_partition_sizes)
 
-    DefaultModelLoader.get_all_weights = _patched_get_all
+        weight_param = torch.nn.Parameter(
+            torch.empty(output_size_per_partition, input_size_per_partition,
+                        dtype=params_dtype),
+            requires_grad=False,
+        )
+
+        # Custom weight_loader: quantizes inline when vLLM loads the weight
+        def _fdu_weight_loader(param, loaded_weight):
+            param.data.copy_(loaded_weight)       # store bf16
+            _quantize_and_register(layer, param.data)  # quantize + register AWQ params
+            # layer.weight is now deleted, qweight/qzeros/scales are registered
+
+        weight_param.weight_loader = _fdu_weight_loader
+        layer.register_parameter("weight", weight_param)
+
+    AWQLinearMethod.create_weights = _fdu_create_weights
+
+    # --- Patch 2: process_weights_after_loading → no-op ---
+    # Quantization already happened in the weight_loader.
+    def _fdu_process_weights(self, layer):
+        pass
+
+    AWQLinearMethod.process_weights_after_loading = _fdu_process_weights
+
+    # --- Patch 3: disable maybe_update_config ---
+    # Stock vLLM scans safetensors to auto-detect unquantized layers. For a bf16
+    # model, ALL weights are bf16, so it marks EVERYTHING as not-to-convert,
+    # meaning get_quant_method returns UnquantizedLinearMethod for all layers.
+    def _noop_maybe_update(self, model_name, revision=None):
+        pass
+
+    AWQConfig.maybe_update_config = _noop_maybe_update
+
     return True
 
 
 def activate_awq_online() -> bool:
-    """Activate online AWQ INT4 quantization.
-
-    Called from hooks.py after quant_force monkey-patch and before model loading.
-    """
     global _PATCHED
     if _PATCHED:
         return True
 
     try:
-        _patch_default_loader()
+        _activate_patches()
         _PATCHED = True
         logger.info(
-            "FDU awq_online v1.0.0: AWQ INT4 online quantization active "
-            "(bf16→INT4 at load time, Triton fused dequant+matmul)"
+            "FDU awq_online v1.0.0: AWQ online INT4 active "
+            "(custom weight_loader → bf16→AWQ INT4 at load time)"
         )
         return True
     except Exception as e:
