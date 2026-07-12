@@ -29,23 +29,13 @@ def _ensure_src_path() -> None:
 def activate() -> None:
     global _ACTIVE, _ATTENTION, _KV_QUANT, _EXEC, _CACHE_MGR
 
-    # ★★★ v1.0.0: force AWQ INT4 quantization ★★★
-    # 1) Monkey-patch ModelConfig → quantization="awq" + quant_config.json
-    # 2) Intercept weight loading → bf16→AWQ INT4 on-the-fly
-    # 3) AWQ Triton kernels → fused dequant+matmul (GPU-native, no CUDA)
+    # v1.1.0: quant_force is no-op (pre_quantize.py handles AWQ at startup)
     try:
         from fdu_vllm.quant_force import activate_quant_force
 
         activate_quant_force()
     except Exception as _qf_err:
         logger.warning("FDU quant_force patch failed: %s", _qf_err)
-
-    try:
-        from fdu_vllm.awq_online import activate_awq_online
-
-        activate_awq_online()
-    except Exception as _awq_err:
-        logger.warning("FDU awq_online patch failed: %s", _awq_err)
 
     from fdu_vllm.config import get_config
     from fdu_vllm.phase1 import log_phase1_summary

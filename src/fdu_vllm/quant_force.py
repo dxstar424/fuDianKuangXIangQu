@@ -1,53 +1,31 @@
 """
-v1.0.0: Force AWQ INT4 quantization + create quant_config.json.
+v1.1.0: Pre-quantize bf16 model→AWQ INT4 at vLLM import time.
 
-Monkey-patches ModelConfig.__init__ to force quantization="awq" and
-creates quant_config.json in the model directory so vLLM's AWQ config
-loader can find it.
+Monkey-patches ModelConfig.__init__ to:
+  1. Detect if --model points to a bf16 HuggingFace model
+  2. Pre-quantize to /tmp/awq_model/ if not already done
+  3. Redirect --model → /tmp/awq_model --quantization → awq
 
-Combined with awq_online.py (which intercepts weight loading to do
-bf16→INT4 on-the-fly), this enables online AWQ INT4 quantization
-using Triton fused dequant+matmul kernels on ROCm gfx942.
+This runs BEFORE platform evaluator parses CLI args (vllm/__init__.py
+→ fdu_vllm.activate()). The platform CANNOT skip this.
 
-Previous attempts:
-  v0.8.1 bitsandbytes INT4: matmul_4bit no ROCm HIP kernel → 0 benefit
-  v0.9.0 FP8 W8A8: torch._scaled_mm crashes (needs MI300+)
-  v0.9.2 FP8 fallback: dequant+matmul = 81GB HBM > 54GB bf16 → slower
+No weight-loading hacks needed — vLLM loads AWQ format natively.
+AWQ Triton kernels (VLLM_USE_TRITON_AWQ=1 on ROCm) do fused dequant+matmul.
 """
 
 from __future__ import annotations
 
-import json
 import logging
 import os
 from functools import wraps
-from pathlib import Path
 
 logger = logging.getLogger("fdu_vllm.quant_force")
 
 _PATCHED = False
-_GROUP_SIZE = 128
-
-
-def _create_quant_config(model_dir: str) -> None:
-    """Create quant_config.json so vLLM's AWQ config loader finds it."""
-    if not model_dir or not os.path.isdir(model_dir):
-        return
-    cfg_path = Path(model_dir) / "quant_config.json"
-    if cfg_path.exists():
-        return  # already created
-    cfg = {
-        "quant_method": "awq",
-        "bits": 4,
-        "group_size": _GROUP_SIZE,
-        "zero_point": True,
-    }
-    cfg_path.write_text(json.dumps(cfg))
-    logger.info("FDU quant_force: created %s → %s", cfg_path, cfg)
+_AWQ_DIR = "/tmp/awq_model"
 
 
 def _patch_model_config() -> bool:
-    """Monkey-patch ModelConfig.__init__ to force quantization='awq'."""
     global _PATCHED
     if _PATCHED:
         return True
@@ -59,26 +37,49 @@ def _patch_model_config() -> bool:
 
         @wraps(_original_init)
         def _patched_init(self, **kwargs):
-            kwargs["quantization"] = "awq"
+            model_path = kwargs.get("model") or getattr(self, "model", None)
+
+            if model_path and os.path.isdir(model_path):
+                cfg_path = os.path.join(_AWQ_DIR, "quant_config.json")
+
+                # Pre-quantize if not already done
+                if not os.path.exists(cfg_path):
+                    logger.info(
+                        "FDU v1.1.0: pre-quantizing %s → %s", model_path, _AWQ_DIR
+                    )
+                    try:
+                        from fdu_vllm.pre_quantize import pre_quantize_model
+
+                        pre_quantize_model(model_path, _AWQ_DIR)
+                        logger.info("FDU v1.1.0: pre-quantization complete")
+                    except Exception as e:
+                        logger.error(
+                            "FDU v1.1.0: pre-quantization failed: %s", e
+                        )
+                        # Fall through — vLLM will load bf16 model normally
+
+                # Redirect to AWQ model if available
+                if os.path.exists(cfg_path):
+                    kwargs["model"] = _AWQ_DIR
+                    kwargs["quantization"] = "awq"
+                    kwargs["dtype"] = "float16"  # AWQ requires float16 on ROCm
+                    logger.info(
+                        "FDU v1.1.0: redirecting → %s, quantization=awq, dtype=float16",
+                        _AWQ_DIR,
+                    )
+
             _original_init(self, **kwargs)
-            # After init, model path is resolved — create quant_config.json
-            try:
-                _create_quant_config(self.model)
-            except Exception:
-                pass
 
         ModelConfig.__init__ = _patched_init
         _PATCHED = True
         logger.info(
-            "FDU quant_force: ModelConfig.__init__ patched — "
-            "quantization forced to 'awq' (online INT4)"
+            "FDU quant_force v1.1.0: ModelConfig.__init__ patched "
+            "(pre-quantize bf16→AWQ INT4 at vLLM import time)"
         )
         return True
 
     except ImportError:
-        logger.warning(
-            "FDU quant_force: vLLM not importable yet"
-        )
+        logger.warning("FDU quant_force: vLLM not importable yet")
         return False
     except Exception as e:
         logger.error("FDU quant_force: patch failed: %s", e)
@@ -86,7 +87,6 @@ def _patch_model_config() -> bool:
 
 
 def activate_quant_force() -> bool:
-    """Public entry point — called from hooks.py."""
     return _patch_model_config()
 
 

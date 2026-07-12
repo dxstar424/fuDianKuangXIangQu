@@ -1,14 +1,14 @@
 # ============================================================
 # FDU SCCSCC26 - 可调参数声明（合规）
-# v1.0.0: AWQ INT4 在线量化 — Triton fused dequant+matmul
+# v1.1.0: AWQ INT4 pre-quantization at startup + native vLLM AWQ
 # ============================================================
 
 phase: 1
 
-# v1.0.0: AWQ INT4 在线量化 — bf16 权重在加载时转为 AWQ INT4 格式
-#   quant_force.py: ModelConfig monkey-patch → quantization="awq"
-#   awq_online.py: 拦截权重加载, bf16→AWQ INT4（group_size=128）
-#   AWQ Triton kernels: 融合 dequant+matmul（纯 Triton, ROCm 原生）
+# v1.1.0: 启动时预量化 bf16 → AWQ INT4, vLLM 原生 AWQ pipeline
+#   pre_quantize.py: 读 bf16 safetensors → 量化 → 写入 /tmp/awq_model/
+#   vLLM: --model /tmp/awq_model --quantization awq（原生 AWQ 加载, 无 hack）
+#   AWQ Triton kernels: VLLM_USE_TRITON_AWQ=1 → 融合 dequant+matmul
 #   4x weight IO reduction: 13.5GB INT4 vs 54GB bf16 per decode
 weight_quantization:
   enabled: true
@@ -16,7 +16,7 @@ weight_quantization:
   bits: 4
   group_size: 128
   zero_point: true
-  mechanism: "fdu_vllm weight interceptor → AWQ Triton fused kernel"
+  mechanism: "pre-quantize at startup → native vLLM AWQ pipeline"
 
 kv_cache:
   strategy: "none"

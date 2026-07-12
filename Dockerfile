@@ -1,5 +1,5 @@
 # ============================================================
-# FDU SCCSCC26 — v1.0.0: AWQ INT4 online quantization
+# FDU SCCSCC26 — v1.1.0: AWQ INT4 pre-quantize + native vLLM AWQ pipeline
 # ============================================================
 
 ARG BASE_IMAGE=competition/vllm-0.18.1-base:v1.0
@@ -31,13 +31,12 @@ COPY docs/env_vars.md ./docs/env_vars.md
 
 RUN chmod +x scripts/*.sh launch.sh
 
-# v1.0.0: AWQ INT4 online quantization
-#   quant_force.py: forces quantization="awq" + creates quant_config.json
-#   awq_online.py: intercepts weight loading, bf16→AWQ INT4 on-the-fly
-#   AWQ Triton kernels: fused dequant+matmul (VLLM_USE_TRITON_AWQ=1)
+# v1.1.0: pre-quantize bf16→AWQ INT4 at import time → native vLLM AWQ pipeline
+#   quant_force.py: ModelConfig monkey-patch → pre-quantize + redirect model/dtype
+#   pre_quantize.py: converts bf16 safetensors → AWQ INT4 format
 RUN python -c "
 import vllm
-# Patch __init__.py — add FDU hook (harmless, quant_force is no-op)
+# Patch __init__.py — add FDU hook
 init_py = vllm.__file__
 marker = '# FDU_CSCC_PLUGIN'
 with open(init_py, 'r') as f:
@@ -61,9 +60,8 @@ ARG ENABLE_VLLM_BUILD=0
 RUN if [ "$ENABLE_VLLM_BUILD" = "1" ]; then bash scripts/compile_vllm.sh; fi
 
 EXPOSE 8000
-# v0.9.3: bf16 stock + AITER optimizations (no weight quantization)
+# v1.1.0: AWQ INT4 via pre-quantize + native vLLM AWQ pipeline
 # FLASH_ATTN + skinny_gemm + rmsnorm via AITER
-# PYTHONPATH set in launch.sh ensures fdu_vllm is importable
 ENV VLLM_ROCM_USE_AITER=1
 ENV VLLM_ROCM_USE_SKINNY_GEMM=1
 ENV VLLM_ROCM_USE_AITER_RMSNORM=1

@@ -1,16 +1,14 @@
 #!/usr/bin/env bash
 # ============================================================
-# v1.0.0 — AWQ INT4 online quantization (Triton fused dequant+matmul)
+# v1.1.0 — Pre-quantize bf16→AWQ INT4 at startup, native vLLM AWQ pipeline
 #
-# 策略：fdu_vllm 三部曲
-#   1) quant_force.py: ModelConfig monkey-patch → quantization="awq"
-#      + 创建 quant_config.json 在模型目录
-#   2) awq_online.py: 拦截权重加载, bf16→AWQ INT4 在线量化
-#   3) AWQ Triton kernels: 融合 dequant+matmul（纯 Triton, GPU 原生）
+# 策略：启动时量化模型到 /tmp/awq_model/，vLLM 原生 AWQ 加载
+#   无需 monkey-patch 权重加载！vLLM 自带 AWQ Triton kernels
 #
-# Triton on ROCm: VLLM_USE_TRITON_AWQ=1 被 rocm.py 强制开启
-# 每次 decode 读取 13.5GB INT4 vs 54GB bf16 → 4x IO reduction
-# ★ PYTHONPATH fix 确保 fdu_vllm 可 import
+#   Step 1: PYTHONPATH → fdu_vllm importable
+#   Step 2: python -m fdu_vllm.pre_quantize → bf16→AWQ INT4 量化
+#   Step 3: vLLM --model /tmp/awq_model --quantization awq
+#   Step 4: vLLM 原生加载 AWQ 格式 → Triton fused dequant+matmul
 # ============================================================
 set -euo pipefail
 
@@ -29,33 +27,42 @@ _resolve_model_path() {
 }
 
 MODEL_PATH="$(_resolve_model_path)"
+AWQ_MODEL_DIR="${AWQ_MODEL_DIR:-/tmp/awq_model}"
 PORT="${PORT:-8000}"
 
+echo "[launch] === v1.1.0: Pre-quantize bf16→AWQ INT4 + native vLLM AWQ ==="
+echo "[launch]   bf16 model: ${MODEL_PATH}"
+echo "[launch]   AWQ output: ${AWQ_MODEL_DIR}"
+
+# ── Step 1: Pre-quantize if not already done ──
+if [[ ! -f "${AWQ_MODEL_DIR}/quant_config.json" ]]; then
+    echo "[launch]   Pre-quantizing (one-time, ~60-90s)..."
+    python -m fdu_vllm.pre_quantize "${MODEL_PATH}" "${AWQ_MODEL_DIR}"
+    echo "[launch]   Pre-quantization complete."
+else
+    echo "[launch]   AWQ model already exists, skipping pre-quantization."
+fi
+
+# ── Step 2: Start vLLM with AWQ model ──
 VLLM_ARGS=(
-    --model "${MODEL_PATH}"
+    --model "${AWQ_MODEL_DIR}"
+    --quantization awq
     --port "${PORT}"
     --tensor-parallel-size 1
     --max-model-len 32768
     --max-num-seqs 256
     --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.95}"
-    --dtype bfloat16
+    --dtype float16
     --trust-remote-code
     --served-model-name Qwen3.5-27B
-    --load-format runai_streamer
+    --load-format auto
     --enable-prefix-caching
     --no-enable-log-requests
     --disable-log-stats
     --compilation-config '{"cudagraph_mode": 3, "cudagraph_capture_sizes": [1, 2, 4, 8]}'
 )
 
-echo "[launch] === v1.0.0: AWQ INT4 online quant (Triton fused dequant+matmul) ==="
-echo "[launch]   quant_force.py → ModelConfig monkey-patch → quantization='awq'"
-echo "[launch]   awq_online.py → intercept weight loading → bf16→AWQ INT4"
-echo "[launch]   AWQ Triton kernels → fused dequant+matmul (GPU-native)"
-echo "[launch]   4x weight IO: 13.5GB INT4 vs 54GB bf16 per decode step"
-echo "[launch]   AITER=1 → FLASH_ATTN + skinny_gemm + rmsnorm"
-echo "[launch]   PYTHONPATH=$SCRIPT_DIR"
-echo "[launch]   model: ${MODEL_PATH}"
+echo "[launch]   Starting vLLM with AWQ model..."
 echo "[launch]   port:  ${PORT}"
 echo "[launch] ====================================="
 

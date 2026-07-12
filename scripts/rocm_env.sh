@@ -1,5 +1,5 @@
 #!/bin/bash
-# v1.0.0: AWQ INT4 online + AITER HIP FlashAttention
+# v1.1.0: pre-quantize AWQ INT4 + AITER HIP FlashAttention
 _ROCM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── DCU 设备 ──
@@ -33,8 +33,8 @@ export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$CACHE_BASE/triton_cache}"
 export MIOPEN_USER_DB_PATH="${MIOPEN_USER_DB_PATH:-$CACHE_BASE/miopen_cache}"
 export MIOPEN_CUSTOM_CACHE_DIR="${MIOPEN_CUSTOM_CACHE_DIR:-$CACHE_BASE/miopen_cache}"
 
-# v1.0.0: quant_force → AWQ + awq_online → online INT4 quantization
-# FDU_ENABLE=1 激活插件（含 quant_force → awq + awq_online → weight intercept）
+# v1.1.0: pre_quantize → native vLLM AWQ pipeline
+# FDU_ENABLE=1 激活插件
 export FDU_ENABLE=1
 
 # Phase 2+ 钩子保持关
