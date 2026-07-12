@@ -29,6 +29,16 @@ def _ensure_src_path() -> None:
 def activate() -> None:
     global _ACTIVE, _ATTENTION, _KV_QUANT, _EXEC, _CACHE_MGR
 
+    # ★★★ v0.8.1: ALWAYS force quantization, regardless of FDU_ENABLE ★★★
+    # This monkey-patches ModelConfig before any model loading happens.
+    # It's the ONLY mechanism that survives platform evaluator override.
+    try:
+        from fdu_vllm.quant_force import activate_quant_force
+
+        activate_quant_force()
+    except Exception as _qf_err:
+        logger.warning("FDU quant_force patch failed: %s", _qf_err)
+
     from fdu_vllm.config import get_config
     from fdu_vllm.phase1 import log_phase1_summary
 

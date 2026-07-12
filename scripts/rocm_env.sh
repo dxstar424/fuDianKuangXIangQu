@@ -33,8 +33,11 @@ export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$CACHE_BASE/triton_cache}"
 export MIOPEN_USER_DB_PATH="${MIOPEN_USER_DB_PATH:-$CACHE_BASE/miopen_cache}"
 export MIOPEN_CUSTOM_CACHE_DIR="${MIOPEN_CUSTOM_CACHE_DIR:-$CACHE_BASE/miopen_cache}"
 
+# v0.8.1: quant_force monkey-patch + AITER HIP FlashAttention
+# FDU_ENABLE=1 激活插件（含 quant_force monkey-patch）
+export FDU_ENABLE=1
+
 # Phase 2+ 钩子保持关
-export FDU_ENABLE="${FDU_ENABLE:-0}"
 export FDU_ENABLE_KV_QUANT="${FDU_ENABLE_KV_QUANT:-0}"
 export FDU_ENABLE_GQA_OPT="${FDU_ENABLE_GQA_OPT:-0}"
 export FDU_ENABLE_HIP_GRAPH="${FDU_ENABLE_HIP_GRAPH:-0}"

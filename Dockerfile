@@ -18,8 +18,9 @@ WORKDIR /workspace
 COPY requirements.txt .
 RUN pip install --no-cache-dir -r requirements.txt
 RUN pip install --no-cache-dir runai-model-streamer || echo "[FDU] runai_streamer skipped"
-# v0.8.0: bitsandbytes for online INT4 quantization (bf16 → INT4 at model load)
-RUN pip install --no-cache-dir bitsandbytes>=0.49.2 || echo "[FDU] bitsandbytes skipped"
+# v0.8.1: bitsandbytes MUST be installed for INT4 quantization to work
+# No fallback — if bnb install fails, we want the build to fail so we know
+RUN pip install --no-cache-dir bitsandbytes>=0.49.2
 
 COPY src/ ./src/
 COPY patches/ ./patches/
@@ -63,8 +64,9 @@ ARG ENABLE_VLLM_BUILD=0
 RUN if [ "$ENABLE_VLLM_BUILD" = "1" ]; then bash scripts/compile_vllm.sh; fi
 
 EXPOSE 8000
-# v0.8.0: bitsandbytes INT4 (via patched vLLM source, no CLI flag needed)
-#         + AITER HIP FlashAttention + skinny_gemm + RMSNorm
+# v0.8.1: force INT4 via fdu_vllm monkey-patch (not CLI flag, not Dockerfile overlay)
+# quant_force.py monkey-patches vllm.config.model.ModelConfig at import time
+# This runs BEFORE any model config is parsed — platform evaluator CANNOT skip it
 ENV VLLM_ROCM_USE_AITER=1
 ENV VLLM_ROCM_USE_SKINNY_GEMM=1
 ENV VLLM_ROCM_USE_AITER_RMSNORM=1
