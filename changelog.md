@@ -1,5 +1,25 @@
 # 变更日志
 
+## [v0.6.0] - 2026-07-12
+
+### ★★★ FINAL: 强制 AITER HIP FlashAttention（非 Triton）★★★
+
+**根因**：v0.5.0 设了 `VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION=1` → 选中的是
+`ROCM_AITER_UNIFIED_ATTN` 后端，该后端用 `aiter.ops.triton.unified_attention`（Triton kernel），
+**不是** HIP FlashAttention。
+
+真正快的后端是 `FLASH_ATTN` (=`ROCM_AITER_FA`)，用 `rocm_aiter_ops.flash_attn_varlen_func()` —
+AITER 编译的 HIP CK FlashAttention kernel。这是优先级 2 的后端，
+只有 **不设** UNIFIED_ATTENTION 才能 fall through 到它。
+
+**v0.6.0 配置**：
+- `VLLM_ROCM_USE_AITER=1`（启用 AITER）
+- **不设** `VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION`（默认 False → 跳过 Triton 统一后端）
+- `VLLM_ROCM_USE_AITER_MHA=True`（默认，启用 FLASH_ATTN 后端）
+- 恢复 prefix caching + warmup + disable logs + cudagraph FULL_DECODE_ONLY
+- GPU 0.95 + runai_streamer + rocBLAS + skinny_gemm
+- 不设 FP8（纯 bf16）
+
 ## [v0.5.0] - 2026-07-12
 
 ### ★ AITER 统一注意力后端（最小变更，最大不确定性）
