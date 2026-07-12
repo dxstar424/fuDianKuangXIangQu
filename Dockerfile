@@ -1,5 +1,5 @@
 # ============================================================
-# FDU SCCSCC26 — v0.9.3: bf16 stock + AITER optimizations
+# FDU SCCSCC26 — v1.0.0: AWQ INT4 online quantization
 # ============================================================
 
 ARG BASE_IMAGE=competition/vllm-0.18.1-base:v1.0
@@ -31,10 +31,10 @@ COPY docs/env_vars.md ./docs/env_vars.md
 
 RUN chmod +x scripts/*.sh launch.sh
 
-# v0.9.3: bf16 stock — no weight quantization (FP8/bnb dead ends)
-#   quant_force.py is a no-op — keeps hook for future use
-#   AITER optimizations: FLASH_ATTN, skinny_gemm, rmsnorm (env vars)
-#   PYTHONPATH in launch.sh ensures fdu_vllm is importable
+# v1.0.0: AWQ INT4 online quantization
+#   quant_force.py: forces quantization="awq" + creates quant_config.json
+#   awq_online.py: intercepts weight loading, bf16→AWQ INT4 on-the-fly
+#   AWQ Triton kernels: fused dequant+matmul (VLLM_USE_TRITON_AWQ=1)
 RUN python -c "
 import vllm
 # Patch __init__.py — add FDU hook (harmless, quant_force is no-op)

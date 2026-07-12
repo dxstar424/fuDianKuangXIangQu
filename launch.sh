@@ -1,20 +1,20 @@
 #!/usr/bin/env bash
 # ============================================================
-# v0.9.3 — bf16 stock + AITER optimizations (no weight quantization)
+# v1.0.0 — AWQ INT4 online quantization (Triton fused dequant+matmul)
 #
-# 策略：PYTHONPATH 确保 fdu_vllm 可 import（v0.8.1 的 bug）
-#       AITER: FLASH_ATTN + skinny_gemm + rmsnorm（env vars 控制）
-#       无重量化 — FP8/bnb 在此平台 DCU 上均不可行
+# 策略：fdu_vllm 三部曲
+#   1) quant_force.py: ModelConfig monkey-patch → quantization="awq"
+#      + 创建 quant_config.json 在模型目录
+#   2) awq_online.py: 拦截权重加载, bf16→AWQ INT4 在线量化
+#   3) AWQ Triton kernels: 融合 dequant+matmul（纯 Triton, GPU 原生）
 #
-# ★ FP8/bnb 总结：
-#   bnb INT4: matmul_4bit 无 ROCm HIP kernel（CPU 反量化）
-#   FP8 W8A8: torch._scaled_mm 需要 MI300+（gfx942 不支持）
-#   FP8 fallback: dequant+matmul = 81GB HBM > 54GB bf16（1.5x 更慢）
+# Triton on ROCm: VLLM_USE_TRITON_AWQ=1 被 rocm.py 强制开启
+# 每次 decode 读取 13.5GB INT4 vs 54GB bf16 → 4x IO reduction
+# ★ PYTHONPATH fix 确保 fdu_vllm 可 import
 # ============================================================
 set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-# ★ FIX v0.9.0: 在 cd /tmp 之前把 repo root 加到 PYTHONPATH，让 fdu_vllm 可 import
 export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
 source "$SCRIPT_DIR/scripts/rocm_env.sh"
 
@@ -48,12 +48,13 @@ VLLM_ARGS=(
     --compilation-config '{"cudagraph_mode": 3, "cudagraph_capture_sizes": [1, 2, 4, 8]}'
 )
 
-echo "[launch] === v0.9.3: bf16 stock + AITER (FLASH_ATTN/skinny_gemm/rmsnorm) ==="
-echo "[launch]   quant_force: no-op (weight quantization dead end on this DCU)"
-echo "[launch]   AITER=1 → FLASH_ATTN backend (HIP CK FlashAttention)"
-echo "[launch]   skinny_gemm=1 → decode GEMV HIP kernel"
-echo "[launch]   rmsnorm=1 → AITER RMSNorm"
-echo "[launch]   PYTHONPATH=$SCRIPT_DIR (fdu_vllm import fix)"
+echo "[launch] === v1.0.0: AWQ INT4 online quant (Triton fused dequant+matmul) ==="
+echo "[launch]   quant_force.py → ModelConfig monkey-patch → quantization='awq'"
+echo "[launch]   awq_online.py → intercept weight loading → bf16→AWQ INT4"
+echo "[launch]   AWQ Triton kernels → fused dequant+matmul (GPU-native)"
+echo "[launch]   4x weight IO: 13.5GB INT4 vs 54GB bf16 per decode step"
+echo "[launch]   AITER=1 → FLASH_ATTN + skinny_gemm + rmsnorm"
+echo "[launch]   PYTHONPATH=$SCRIPT_DIR"
 echo "[launch]   model: ${MODEL_PATH}"
 echo "[launch]   port:  ${PORT}"
 echo "[launch] ====================================="

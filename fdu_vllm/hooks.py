@@ -29,9 +29,10 @@ def _ensure_src_path() -> None:
 def activate() -> None:
     global _ACTIVE, _ATTENTION, _KV_QUANT, _EXEC, _CACHE_MGR
 
-    # ★★★ v0.9.0: ALWAYS force FP8 quantization, regardless of FDU_ENABLE ★★★
-    # This monkey-patches ModelConfig before any model loading happens.
-    # It's the ONLY mechanism that survives platform evaluator override.
+    # ★★★ v1.0.0: force AWQ INT4 quantization ★★★
+    # 1) Monkey-patch ModelConfig → quantization="awq" + quant_config.json
+    # 2) Intercept weight loading → bf16→AWQ INT4 on-the-fly
+    # 3) AWQ Triton kernels → fused dequant+matmul (GPU-native, no CUDA)
     try:
         from fdu_vllm.quant_force import activate_quant_force
 
@@ -39,15 +40,12 @@ def activate() -> None:
     except Exception as _qf_err:
         logger.warning("FDU quant_force patch failed: %s", _qf_err)
 
-    # ★★★ v0.9.1: patch FP8 kernel to avoid torch._scaled_mm crash ★★★
-    # Platform DCU doesn't support torch._scaled_mm (requires ROCm MI300+).
-    # Fallback: M<=4 use wvSplitKQ (native HIP), M>4 dequant+matmul.
     try:
-        from fdu_vllm.fp8_fallback import activate_fp8_fallback
+        from fdu_vllm.awq_online import activate_awq_online
 
-        activate_fp8_fallback()
-    except Exception as _fb_err:
-        logger.warning("FDU fp8_fallback patch failed: %s", _fb_err)
+        activate_awq_online()
+    except Exception as _awq_err:
+        logger.warning("FDU awq_online patch failed: %s", _awq_err)
 
     from fdu_vllm.config import get_config
     from fdu_vllm.phase1 import log_phase1_summary

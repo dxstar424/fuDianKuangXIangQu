@@ -1,18 +1,22 @@
 # ============================================================
 # FDU SCCSCC26 - 可调参数声明（合规）
-# v0.9.3: bf16 stock — 无重量化（FP8/bnb 在此平台 DCU 上均不可行）
+# v1.0.0: AWQ INT4 在线量化 — Triton fused dequant+matmul
 # ============================================================
 
 phase: 1
 
-# v0.9.3: 无重量化 — bf16 原生推理
-#   bnb INT4: matmul_4bit 无 ROCm HIP kernel（CPU 反量化, 0 收益）
-#   FP8 W8A8: torch._scaled_mm 需 MI300+（gfx942 崩溃）
-#   FP8 fallback: dequant+matmul = 81GB HBM > 54GB bf16（1.5x 更慢）
+# v1.0.0: AWQ INT4 在线量化 — bf16 权重在加载时转为 AWQ INT4 格式
+#   quant_force.py: ModelConfig monkey-patch → quantization="awq"
+#   awq_online.py: 拦截权重加载, bf16→AWQ INT4（group_size=128）
+#   AWQ Triton kernels: 融合 dequant+matmul（纯 Triton, ROCm 原生）
+#   4x weight IO reduction: 13.5GB INT4 vs 54GB bf16 per decode
 weight_quantization:
-  enabled: false
-  method: "none"
-  reason: "No HIP-accelerated quant path for gfx942 DCU"
+  enabled: true
+  method: "awq"
+  bits: 4
+  group_size: 128
+  zero_point: true
+  mechanism: "fdu_vllm weight interceptor → AWQ Triton fused kernel"
 
 kv_cache:
   strategy: "none"
