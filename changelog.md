@@ -1,5 +1,22 @@
 # 变更日志
 
+## [v0.5.0] - 2026-07-12
+
+### ★ AITER 统一注意力后端（最小变更，最大不确定性）
+
+**数据**：五次实验（A/B/C/D/v0.4.0）全部 ~59.7，CLI flag 改动无效。
+
+**假设**：DCU 上性能瓶颈在 attention 后端。vLLM ROCm 默认走 TRITON_ATTN，Triton FlashAttention 在 gfx942 上可能未充分优化。AITER unified attention 是 AMD 官方优化路径，优先级最高。
+
+**改动**（极简——只设两个 env var）：
+- `launch.sh`：去除所有复杂配置，只保留 `VLLM_ROCM_USE_AITER=1` + `VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION=1` + 最简 vLLM CLI
+- `scripts/rocm_env.sh`：清空为最小 stub
+- `Dockerfile`：同步 ENV var
+- `config.yaml`：回退到 stock 值
+- vLLM 自动设置 `block_size=64`（AITER unified attention 要求）
+
+**预期效果**：不确定。若 AITER kernel 优于 Triton → 显著提速；若 AITER 无区别 → 仍 ~60。
+
 ## [v0.4.0] - 2026-07-12
 
 ### ★ 去 FP8 + 最大化系统优化（60 → 90 冲刺）

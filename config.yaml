@@ -1,42 +1,32 @@
 # ============================================================
 # FDU SCCSCC26 - 可调参数声明（合规）
-# 禁止修改: max-num-seqs, max-num-batched-tokens, batch scheduler
+# v0.5.0: AITER unified attention — 最简配置
 # ============================================================
 
-# --- Phase（1=最有把握 launch 项；2+=钩子）---
-# 运行时以环境变量 FDU_PHASE 为准；评测默认 1
 phase: 1
 
-# --- KV Cache 管理 ---
 kv_cache:
-  strategy: "none"                 # 保持 none；defrag 未接线勿开
-  block_size: 32                   # v0.4.0: 32（减半页表，32K 长档友好）
-  gpu_memory_utilization: 0.97     # v0.4.0 激进：最大 KV cache 池
-  enable_kv_quant: false           # 关，保精度系数
+  strategy: "none"
+  block_size: 16
+  gpu_memory_utilization: 0.95
+  enable_kv_quant: false
   kv_quant_dtype: "fp8"
   defrag_threshold: 0.7
 
-# --- Attention 后端 ---
 attention:
-  backend: "vllm_default"          # S3：GQA wrap stock selector，勿默认 dcu_optimized
+  backend: "vllm_default"
   use_paged_attention: true
-  num_kv_heads: 32                 # Qwen3.5-27B GQA
+  num_kv_heads: 32
   num_q_heads: 64
 
-# --- FP8 在线权重量化（v0.4.0 关闭：ROCm 上负优化）---
 fp8_weight_quant:
-  enabled: false                    # 关键！16-32K 倒退的根因
+  enabled: false
 
-# --- 执行路径（不触碰 batch scheduler）---
 executor:
-  enable_prefix_caching: true      # Phase 1 必开
-  use_cuda_graph: true             # v0.2.17 B: 开原生 HIP Graph
-  cuda_graph_max_bs: 1             # 并发=1
+  enable_prefix_caching: false
+  use_cuda_graph: true
+  cuda_graph_max_bs: 1
 
-# --- 精度门禁 ---
 precision:
   enforce_accuracy_check: true
-  accuracy_tolerance: 0.01         # Δ ≤ 1%
-
-# --- 已弃用（赛题禁止改 batch scheduler，并发=1 无收益）---
-# scheduler: 见 src/scheduler/custom_scheduler.py（仅参考，不启用）
+  accuracy_tolerance: 0.01
