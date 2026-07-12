@@ -29,7 +29,7 @@ def _ensure_src_path() -> None:
 def activate() -> None:
     global _ACTIVE, _ATTENTION, _KV_QUANT, _EXEC, _CACHE_MGR
 
-    # ★★★ v0.9.0: ALWAYS force quantization, regardless of FDU_ENABLE ★★★
+    # ★★★ v0.9.0: ALWAYS force FP8 quantization, regardless of FDU_ENABLE ★★★
     # This monkey-patches ModelConfig before any model loading happens.
     # It's the ONLY mechanism that survives platform evaluator override.
     try:
@@ -38,6 +38,16 @@ def activate() -> None:
         activate_quant_force()
     except Exception as _qf_err:
         logger.warning("FDU quant_force patch failed: %s", _qf_err)
+
+    # ★★★ v0.9.1: patch FP8 kernel to avoid torch._scaled_mm crash ★★★
+    # Platform DCU doesn't support torch._scaled_mm (requires ROCm MI300+).
+    # Fallback: M<=4 use wvSplitKQ (native HIP), M>4 dequant+matmul.
+    try:
+        from fdu_vllm.fp8_fallback import activate_fp8_fallback
+
+        activate_fp8_fallback()
+    except Exception as _fb_err:
+        logger.warning("FDU fp8_fallback patch failed: %s", _fb_err)
 
     from fdu_vllm.config import get_config
     from fdu_vllm.phase1 import log_phase1_summary
@@ -100,15 +110,6 @@ def activate() -> None:
             patch_attn_selector()
         except Exception as e:
             logger.warning("GQA selector patch early-fail: %s", e)
-
-    # HIP FlashAttention prefill backend
-    if cfg.enable_flash_attn:
-        try:
-            from fdu_vllm.flash_attn_backend import install_flash_attn_backend
-
-            install_flash_attn_backend()
-        except Exception as e:
-            logger.warning("FlashAttn backend install failed: %s", e)
 
     if cfg.attention_backend in ("dcu_optimized", "flash_attn"):
         from fdu_vllm.attention import install_attention_hooks
