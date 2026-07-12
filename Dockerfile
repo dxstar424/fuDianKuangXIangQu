@@ -72,6 +72,30 @@ if marker not in content:
     print('[FDU] vLLM __init__.py patched: FDU hook appended')
 else:
     print('[FDU] vLLM __init__.py: FDU hook already present')
+
+# v0.9.2: patch fp8.py — replace apply() with dequant+matmul (bypass torch._scaled_mm)
+fp8_py = vllm.model_executor.layers.quantization.fp8.__file__
+fp8_marker = '# ── FDU v0.9.2'
+with open(fp8_py, 'r') as f:
+    fp8_content = f.read()
+if fp8_marker not in fp8_content:
+    with open(fp8_py, 'a') as f:
+        f.write('\n')
+        f.write(fp8_marker + ': dequant fallback ──\n')
+        f.write('_FDU_ORIG_FP8_APPLY = Fp8LinearMethod.apply\n')
+        f.write('def _fdu_fp8_apply(self, layer, x, bias=None):\n')
+        f.write('    w = layer.weight.to(x.dtype) * layer.weight_scale.to(x.dtype)\n')
+        f.write('    return torch.nn.functional.linear(x, w.t(), bias)\n')
+        f.write('Fp8LinearMethod.apply = _fdu_fp8_apply\n')
+    print('[FDU] vLLM fp8.py patched: apply() → dequant+matmul fallback')
+else:
+    print('[FDU] vLLM fp8.py: fallback already present')
+# Clear fp8.py bytecode cache so Python picks up our patch
+fp8_pycache = os.path.join(os.path.dirname(fp8_py), '__pycache__')
+if os.path.exists(fp8_pycache):
+    for f in os.listdir(fp8_pycache):
+        if 'fp8' in f:
+            os.remove(os.path.join(fp8_pycache, f))
 "
 
 ARG ENABLE_VLLM_BUILD=0

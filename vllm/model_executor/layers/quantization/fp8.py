@@ -1250,3 +1250,24 @@ class Fp8KVCacheMethod(BaseKVCacheMethod):
 
     def __init__(self, quant_config: Fp8Config):
         super().__init__(quant_config)
+
+
+# ── FDU v0.9.2: replace Fp8LinearMethod.apply with dequant-fallback ──
+# torch._scaled_mm requires ROCm MI300+, not available on gfx942 DCU.
+# Replace the per-tensor FP8 apply() with a dequant→bf16→matmul path
+# that works on any GPU. This runs unconditionally — no import needed.
+_FDU_ORIG_FP8_APPLY = Fp8LinearMethod.apply
+
+
+def _fdu_fp8_apply(
+    self,
+    layer: torch.nn.Module,
+    x: torch.Tensor,
+    bias: torch.Tensor | None = None,
+) -> torch.Tensor:
+    """Dequant FP8 weights→bf16 + torch.nn.functional.linear."""
+    w = layer.weight.to(x.dtype) * layer.weight_scale.to(x.dtype)
+    return torch.nn.functional.linear(x, w.t(), bias)
+
+
+Fp8LinearMethod.apply = _fdu_fp8_apply
