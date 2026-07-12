@@ -38,4 +38,13 @@ if [[ -d "$FDU_SRC" ]]; then
     rsync -a --delete "$FDU_SRC/" "$VLLM_DIR/fdu_vllm/" 2>/dev/null || cp -r "$FDU_SRC/." "$VLLM_DIR/fdu_vllm/"
 fi
 
+# v0.9.0: patch pyproject.toml to include fdu_vllm in pip install
+PYPROJECT="$VLLM_DIR/pyproject.toml"
+if [[ -f "$PYPROJECT" ]]; then
+    if grep -q 'include = \["vllm\*"\]' "$PYPROJECT"; then
+        sed -i 's/include = \["vllm\*"\]/include = ["vllm*", "fdu_vllm*"]/' "$PYPROJECT"
+        echo "[apply_vllm_patches] pyproject.toml: added fdu_vllm* to packages"
+    fi
+fi
+
 echo "[apply_vllm_patches] Done"
