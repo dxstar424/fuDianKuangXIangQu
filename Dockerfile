@@ -36,12 +36,15 @@ RUN chmod +x scripts/*.sh launch.sh
 #   Fp8OnlineLinearMethod → bf16 → FP8 at model load
 #   torch._scaled_mm → ROCm native HIP kernel (no on-the-fly dequant)
 #   PYTHONPATH set in launch.sh ensures fdu_vllm is importable
-# v0.9.0: belt-and-suspenders — also patch installed vLLM source default
-#   model.py: quantization default None → "fp8"
-#   This covers the Dockerfile scenario where fdu_vllm may or may not be importable
+# v0.9.0: belt-and-suspenders — patch installed vLLM source in base image
+#   1) model.py: quantization default None → "fp8" (backup if fdu_vllm not imported)
+#   2) __init__.py: append FDU hook so fdu_vllm.activate() runs at import time
 RUN python -c "
 import vllm.config.model
+import vllm
 import shutil, os
+
+# Patch model.py — default quantization = fp8 (belt, works without fdu_vllm)
 dst_model = vllm.config.model.__file__
 shutil.copy('/workspace/patches/vllm_cscc_modified/model.py', dst_model)
 pycache = os.path.join(os.path.dirname(dst_model), '__pycache__')
@@ -50,6 +53,25 @@ if os.path.exists(pycache):
         if 'model' in f:
             os.remove(os.path.join(pycache, f))
 print('[FDU] vLLM model.py patched: quantization default → fp8')
+
+# Patch __init__.py — add FDU hook (suspenders, enables quant_force monkey-patch)
+init_py = vllm.__file__
+marker = '# FDU_CSCC_PLUGIN'
+with open(init_py, 'r') as f:
+    content = f.read()
+if marker not in content:
+    with open(init_py, 'a') as f:
+        f.write('\n')
+        f.write(marker + '\n')
+        f.write('try:\n')
+        f.write('    import fdu_vllm  # noqa: F401\n')
+        f.write('    fdu_vllm.activate()\n')
+        f.write('except Exception as _fdu_err:\n')
+        f.write('    import logging\n')
+        f.write('    logging.getLogger(\"fdu_vllm\").warning(\"FDU plugin not activated: %s\", _fdu_err)\n')
+    print('[FDU] vLLM __init__.py patched: FDU hook appended')
+else:
+    print('[FDU] vLLM __init__.py: FDU hook already present')
 "
 
 ARG ENABLE_VLLM_BUILD=0
