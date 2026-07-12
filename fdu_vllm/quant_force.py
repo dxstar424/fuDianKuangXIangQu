@@ -1,74 +1,35 @@
 """
-v0.9.0: Monkey-patch vLLM ModelConfig to force FP8 online quantization.
+v0.9.3: No-op placeholder — no weight quantization.
 
-This runs at vLLM import time (via vllm/__init__.py → fdu_vllm.activate()),
-BEFORE any model config is parsed. The platform CANNOT skip this hook.
+Previous attempts:
+  v0.8.1 bitsandbytes INT4: matmul_4bit no ROCm HIP kernel → 0 benefit
+  v0.9.0 FP8 W8A8: torch._scaled_mm crashes on platform gfx942 DCU
+  v0.9.2 FP8 dequant fallback: 81GB HBM traffic (vs 54GB bf16) → 1.5x slower
 
-Unlike CLI flags (overridden by platform evaluator) or Dockerfile patches
-(may not be used by platform), this monkey-patch is guaranteed to execute
-as long as vLLM imports our fdu_vllm plugin — which it always does.
+Weight quantization is a dead end on this platform — all quant methods
+either crash or have no HIP-accelerated computation path.
 
-FP8 W8A8 (vs v0.8.1 bitsandbytes INT4):
-  - torch._scaled_mm: ROCm 原生 HIP kernel, 不需要 on-the-fly 反量化
-  - Fp8OnlineLinearMethod: bf16 → FP8 在模型加载时量化
-  - 2x weight HBM IO reduction (FP8 8-bit vs bf16 16-bit)
-  - bitsandbytes 的 matmul_4bit 在 ROCm 上无 HIP 支持, 每次 forward 都做 CPU 反量化
+Strategy: stock bf16 + AITER optimizations (FLASH_ATTN, skinny_gemm, rmsnorm).
 """
 
 from __future__ import annotations
 
 import logging
-from functools import wraps
 
 logger = logging.getLogger("fdu_vllm.quant_force")
 
 _PATCHED = False
 
 
-def _patch_model_config() -> bool:
-    """Monkey-patch vllm.config.model.ModelConfig to force quantization='fp8'.
+def activate_quant_force() -> bool:
+    """v0.9.3: NO-OP — no weight quantization forced.
 
-    The patch intercepts ModelConfig.__init__ to ensure quantization is always
-    set to 'fp8', regardless of CLI args or config files.
-
-    Returns True if patched successfully.
+    We keep this hook point alive for future use (e.g., AWQ Triton if viable).
     """
     global _PATCHED
-    if _PATCHED:
-        return True
-
-    try:
-        from vllm.config.model import ModelConfig
-
-        _original_init = ModelConfig.__init__
-
-        @wraps(_original_init)
-        def _patched_init(self, **kwargs):
-            # Force FP8 quantization before original init processes it
-            kwargs["quantization"] = "fp8"
-            _original_init(self, **kwargs)
-
-        ModelConfig.__init__ = _patched_init
-        _PATCHED = True
-        logger.info(
-            "FDU quant_force: ModelConfig.__init__ patched — "
-            "quantization forced to 'fp8'"
-        )
-        return True
-
-    except ImportError:
-        logger.warning(
-            "FDU quant_force: vLLM not importable yet, will retry at hook time"
-        )
-        return False
-    except Exception as e:
-        logger.error("FDU quant_force: patch failed: %s", e)
-        return False
-
-
-def activate_quant_force() -> bool:
-    """Public entry point — called from hooks.py."""
-    return _patch_model_config()
+    _PATCHED = True
+    logger.info("FDU quant_force: no-op (v0.9.3 — bf16 stock, no weight quant)")
+    return True
 
 
 def is_patched() -> bool:

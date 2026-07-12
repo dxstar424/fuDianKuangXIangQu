@@ -1,20 +1,18 @@
 # ============================================================
 # FDU SCCSCC26 - 可调参数声明（合规）
-# v0.9.0: FP8 在线量化 — torch._scaled_mm ROCm HIP kernel
+# v0.9.3: bf16 stock — 无重量化（FP8/bnb 在此平台 DCU 上均不可行）
 # ============================================================
 
 phase: 1
 
-# v0.9.0: FP8 W8A8 在线量化 — bf16 权重在模型加载时转为 FP8
-# 策略：fdu_vllm/quant_force.py monkey-patch → quantization="fp8"
-#       torch._scaled_mm: ROCm 原生 HIP kernel（无需 on-the-fly 反量化）
-#       对比 v0.8.1 bitsandbytes: INT4 存储但 matmul_4bit 无 ROCm kernel
+# v0.9.3: 无重量化 — bf16 原生推理
+#   bnb INT4: matmul_4bit 无 ROCm HIP kernel（CPU 反量化, 0 收益）
+#   FP8 W8A8: torch._scaled_mm 需 MI300+（gfx942 崩溃）
+#   FP8 fallback: dequant+matmul = 81GB HBM > 54GB bf16（1.5x 更慢）
 weight_quantization:
-  enabled: true
-  method: "fp8"
-  bits: 8
-  compute_dtype: "bfloat16"
-  mechanism: "fdu_vllm monkey-patch → Fp8OnlineLinearMethod → torch._scaled_mm"
+  enabled: false
+  method: "none"
+  reason: "No HIP-accelerated quant path for gfx942 DCU"
 
 kv_cache:
   strategy: "none"

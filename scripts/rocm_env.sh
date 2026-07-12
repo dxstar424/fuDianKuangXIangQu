@@ -1,5 +1,5 @@
 #!/bin/bash
-# v0.9.0: FP8 online quantization (torch._scaled_mm) + AITER HIP FlashAttention
+# v0.9.3: bf16 stock + AITER HIP FlashAttention (no weight quantization)
 _ROCM_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 
 # ── DCU 设备 ──
@@ -33,8 +33,8 @@ export TRITON_CACHE_DIR="${TRITON_CACHE_DIR:-$CACHE_BASE/triton_cache}"
 export MIOPEN_USER_DB_PATH="${MIOPEN_USER_DB_PATH:-$CACHE_BASE/miopen_cache}"
 export MIOPEN_CUSTOM_CACHE_DIR="${MIOPEN_CUSTOM_CACHE_DIR:-$CACHE_BASE/miopen_cache}"
 
-# v0.9.0: quant_force monkey-patch (FP8) + AITER HIP FlashAttention
-# FDU_ENABLE=1 激活插件（含 quant_force monkey-patch → fp8）
+# v0.9.3: quant_force 为 no-op（重量化在此 DCU 上不可行）
+# FDU_ENABLE=1 激活插件（含 quant_force no-op + fp8_fallback no-op）
 export FDU_ENABLE=1
 
 # Phase 2+ 钩子保持关

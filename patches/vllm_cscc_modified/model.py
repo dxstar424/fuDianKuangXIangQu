@@ -186,14 +186,11 @@ class ModelConfig:
     otherwise it will find the largest length that can be accommodated."""
     spec_target_max_model_len: int | None = None
     """Specify the maximum length for spec decoding draft models."""
-    quantization: QuantizationMethods | str | None = "fp8"
+    quantization: QuantizationMethods | str | None = None
     """Method used to quantize the weights. If `None`, we first check the
     `quantization_config` attribute in the model config file. If that is
     `None`, we assume the model weights are not quantized and use `dtype` to
-    determine the data type of the weights.
-
-    MODIFIED by FDU v0.9.0: default changed from None to "fp8"
-    to force online FP8 quantization without CLI flag dependency."""
+    determine the data type of the weights."""
     allow_deprecated_quantization: bool = False
     """Whether to allow deprecated quantization methods."""
     enforce_eager: bool = False

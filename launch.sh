@@ -1,16 +1,15 @@
 #!/usr/bin/env bash
 # ============================================================
-# v0.9.0 — FP8 online quantization (torch._scaled_mm ROCm HIP kernel)
+# v0.9.3 — bf16 stock + AITER optimizations (no weight quantization)
 #
-# 策略：fdu_vllm/quant_force.py monkey-patch vllm.config.model.ModelConfig
-#       在 vLLM import 时自动执行，将 quantization 强制为 "fp8"
-#       平台评测机无法跳过这个 hook（vllm/__init__.py 无条件调用 fdu_vllm.activate()）
+# 策略：PYTHONPATH 确保 fdu_vllm 可 import（v0.8.1 的 bug）
+#       AITER: FLASH_ATTN + skinny_gemm + rmsnorm（env vars 控制）
+#       无重量化 — FP8/bnb 在此平台 DCU 上均不可行
 #
-# 与 v0.8.1 的区别：
-#   v0.8.1: bitsandbytes INT4 → matmul_4bit on-the-fly dequant（无 ROCm HIP kernel）
-#   v0.9.0: FP8 W8A8 → torch._scaled_mm（ROCm 原生 HIP kernel），无需反量化
-#
-# ★ 关键修复：PYTHONPATH 确保 fdu_vllm 可 import（v0.8.1 因 cd /tmp 导致 import 失败）
+# ★ FP8/bnb 总结：
+#   bnb INT4: matmul_4bit 无 ROCm HIP kernel（CPU 反量化）
+#   FP8 W8A8: torch._scaled_mm 需要 MI300+（gfx942 不支持）
+#   FP8 fallback: dequant+matmul = 81GB HBM > 54GB bf16（1.5x 更慢）
 # ============================================================
 set -euo pipefail
 
@@ -49,12 +48,11 @@ VLLM_ARGS=(
     --compilation-config '{"cudagraph_mode": 3, "cudagraph_capture_sizes": [1, 2, 4, 8]}'
 )
 
-echo "[launch] === v0.9.0: FP8 online quantization (torch._scaled_mm HIP kernel) ==="
-echo "[launch]   quant_force.py monkey-patches ModelConfig at vLLM import time"
-echo "[launch]   quantization → 'fp8' (forced, NOT via CLI flag)"
-echo "[launch]   bf16 weights → FP8 W8A8 at model load (2x IO reduction)"
-echo "[launch]   torch._scaled_mm: ROCm 原生 HIP kernel (no on-the-fly dequant)"
-echo "[launch]   VLLM_ROCM_USE_AITER=1 (HIP FA for attention)"
+echo "[launch] === v0.9.3: bf16 stock + AITER (FLASH_ATTN/skinny_gemm/rmsnorm) ==="
+echo "[launch]   quant_force: no-op (weight quantization dead end on this DCU)"
+echo "[launch]   AITER=1 → FLASH_ATTN backend (HIP CK FlashAttention)"
+echo "[launch]   skinny_gemm=1 → decode GEMV HIP kernel"
+echo "[launch]   rmsnorm=1 → AITER RMSNorm"
 echo "[launch]   PYTHONPATH=$SCRIPT_DIR (fdu_vllm import fix)"
 echo "[launch]   model: ${MODEL_PATH}"
 echo "[launch]   port:  ${PORT}"
