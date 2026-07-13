@@ -287,9 +287,19 @@ torch::Tensor LLMM1(at::Tensor& in_a, at::Tensor& in_b,
   return out_c;
 }
 
+#if defined(__gfx936__)
+// DCU gfx936 does not implement the half-dot inline opcode. Keep the half instantiation
+// compilable; the bf16 path below remains the native path used by the target.
+#define FDU_HALF_DOT2C(V0, V2, V3)                                            \
+  V0 += __half2float(V2) * __half2float(V3)
+#else
+#define FDU_HALF_DOT2C(V0, V2, V3)                                            \
+  asm("v_dot2c_f32_f16 %0, %2, %3" : "=v"(V0) : "0"(V0), "v"(V2), "v"(V3))
+#endif
+
 #define DOT2C(V0, V2, V3)                                                     \
   if constexpr (std::is_same_v<scalar_t, half>) {                             \
-    asm("v_dot2c_f32_f16 %0, %2, %3" : "=v"(V0) : "0"(V0), "v"(V2), "v"(V3)); \
+    FDU_HALF_DOT2C(V0, V2, V3);                                               \
   } else if constexpr (std::is_same_v<scalar_t, __hip_bfloat16>) {            \
     float2 s = __bfloat1622float2(*((__hip_bfloat162*)(&(V2)))) *             \
                __bfloat1622float2(*((__hip_bfloat162*)(&(V3))));              \

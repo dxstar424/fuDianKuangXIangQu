@@ -24,6 +24,14 @@ class Gfx936BuildContractTest(unittest.TestCase):
         mi3xx_block = mi3xx_tail.split("#endif", 1)[0]
         self.assertNotIn("defined(__gfx936__)", mi3xx_block)
 
+    def test_gfx936_does_not_emit_unsupported_half_dot2_instruction(self) -> None:
+        text = (ROOT / "csrc/rocm/skinny_gemms.cu").read_text()
+        marker = "#if defined(__gfx936__)"
+        self.assertIn("#define FDU_HALF_DOT2C", text)
+        gfx936_block = text.split(marker, 1)[1].split("#else", 1)[0]
+        self.assertIn("__half2float", gfx936_block)
+        self.assertNotIn("v_dot2c_f32_f16", gfx936_block)
+
 
 if __name__ == "__main__":
     unittest.main()
