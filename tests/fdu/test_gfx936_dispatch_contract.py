@@ -2,8 +2,11 @@ from __future__ import annotations
 
 import ast
 import os
+import sys
 import unittest
+from dataclasses import dataclass
 from pathlib import Path
+from types import ModuleType, SimpleNamespace
 from unittest import mock
 
 
@@ -11,6 +14,19 @@ ROOT = Path(__file__).resolve().parents[2]
 ENVS_PATH = ROOT / "vllm/envs.py"
 UTILS_PATH = ROOT / "vllm/model_executor/layers/utils.py"
 ROCM_PATH = ROOT / "vllm/platforms/rocm.py"
+_MISSING = object()
+_STUBBED_MODULE_NAMES = (
+    "vllm",
+    "vllm.platforms",
+    "vllm.platforms.rocm",
+    "vllm.model_executor",
+    "vllm.model_executor.layers",
+    "vllm.model_executor.layers.rocm_skinny_policy",
+    "aiter",
+    "aiter.ops",
+    "aiter.ops.triton",
+    "aiter.ops.triton.gemm_a16w16",
+)
 
 
 def _parse(path: Path) -> tuple[str, ast.Module]:
@@ -68,6 +84,271 @@ def _assignment_value(source: str) -> ast.expr:
     if not isinstance(assignment, ast.Assign):
         raise AssertionError("test helper expected an assignment")
     return assignment.value
+
+
+def _snapshot_modules(names: tuple[str, ...]) -> dict[str, object]:
+    return {name: sys.modules.get(name, _MISSING) for name in names}
+
+
+def _restore_modules(saved_modules: dict[str, object]) -> None:
+    for name, saved in reversed(saved_modules.items()):
+        if saved is _MISSING:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = saved  # type: ignore[assignment]
+
+
+class _FakeDtype:
+    def __init__(self, name: str) -> None:
+        self.name = name
+
+    def __str__(self) -> str:
+        return f"torch.{self.name}"
+
+
+class _FakeTensor:
+    def __init__(
+        self,
+        label: str,
+        shape: tuple[int, ...],
+        dtype: _FakeDtype,
+        *,
+        contiguous: bool = True,
+    ) -> None:
+        self.label = label
+        self.shape = shape
+        self.dtype = dtype
+        self._contiguous = contiguous
+
+    def numel(self) -> int:
+        product = 1
+        for dimension in self.shape:
+            product *= dimension
+        return product
+
+    def size(self, dimension: int) -> int:
+        return self.shape[dimension]
+
+    def reshape(self, *shape: int) -> _FakeTensor:
+        return self
+
+    def is_contiguous(self) -> bool:
+        return self._contiguous
+
+
+class _FakeResult:
+    def __init__(self, origin: str) -> None:
+        self.origin = origin
+        self.reshape_calls: list[tuple[int, ...]] = []
+
+    def reshape(self, *shape: int) -> _FakeResult:
+        self.reshape_calls.append(shape)
+        return self
+
+
+@dataclass(frozen=True)
+class _DispatchScenario:
+    force_stock: bool = False
+    use_skinny: bool = True
+    supports_skinny: bool = True
+    gfx936: bool = False
+    gfx9: bool = False
+    gfx950: bool = False
+    policy_result: bool | BaseException = False
+    aiter_result: bool = False
+    n: int = 1
+    m: int = 4096
+    k: int = 4096
+    dtype_name: str = "bfloat16"
+    weight_dtype_name: str | None = None
+    bias: object | None = None
+    weight_contiguous: bool = True
+    cu_count: int = 120
+
+
+@dataclass(frozen=True)
+class _DispatchRun:
+    result: _FakeResult
+    events: list[tuple[object, ...]]
+    x: _FakeTensor
+    weight: _FakeTensor
+
+
+def _fake_package(name: str) -> ModuleType:
+    package = ModuleType(name)
+    package.__path__ = []  # type: ignore[attr-defined]
+    return package
+
+
+def _compile_dispatch(namespace: dict[str, object]):
+    text, tree = _parse(UTILS_PATH)
+    function = _function(tree, "rocm_unquantized_gemm_impl")
+    function_source = ast.get_source_segment(text, function)
+    if function_source is None:
+        raise AssertionError("could not extract ROCm GEMM dispatch source")
+    source = "from __future__ import annotations\n" + function_source
+    exec(compile(source, UTILS_PATH, "exec"), namespace)
+    return namespace["rocm_unquantized_gemm_impl"]
+
+
+def _run_dispatch(scenario: _DispatchScenario) -> _DispatchRun:
+    events: list[tuple[object, ...]] = []
+    bfloat16 = _FakeDtype("bfloat16")
+    float16 = _FakeDtype("float16")
+    dtypes = {"bfloat16": bfloat16, "float16": float16}
+    x_dtype = dtypes[scenario.dtype_name]
+    weight_dtype = dtypes[scenario.weight_dtype_name or scenario.dtype_name]
+    x = _FakeTensor("x", (scenario.n, scenario.k), x_dtype)
+    weight = _FakeTensor(
+        "weight",
+        (scenario.m, scenario.k),
+        weight_dtype,
+        contiguous=scenario.weight_contiguous,
+    )
+
+    def record(name: str, *arguments: object) -> None:
+        events.append((name, *arguments))
+
+    def stock_linear(
+        actual_x: _FakeTensor,
+        actual_weight: _FakeTensor,
+        actual_bias: object | None,
+    ) -> _FakeResult:
+        record("stock", actual_x, actual_weight, actual_bias)
+        return _FakeResult("stock")
+
+    def num_compute_units() -> int:
+        record("cu")
+        return scenario.cu_count
+
+    def use_aiter_triton_gemm(
+        n: int, m: int, k: int, dtype: _FakeDtype
+    ) -> bool:
+        record("aiter_select", n, m, k, str(dtype))
+        return scenario.aiter_result
+
+    def wvsplitkrc(
+        actual_x: _FakeTensor,
+        actual_weight: _FakeTensor,
+        cu_count: int,
+        bias: object | None,
+    ) -> _FakeResult:
+        record("wvSplitKrc", actual_x, actual_weight, cu_count, bias)
+        return _FakeResult("wvSplitKrc")
+
+    def wvsplitk(
+        actual_weight: _FakeTensor,
+        actual_x: _FakeTensor,
+        cu_count: int,
+        bias: object | None,
+    ) -> _FakeResult:
+        record("wvSplitK", actual_weight, actual_x, cu_count, bias)
+        return _FakeResult("wvSplitK")
+
+    def llmm1(
+        actual_weight: _FakeTensor,
+        actual_x: _FakeTensor,
+        split_count: int,
+    ) -> _FakeResult:
+        record("LLMM1", actual_weight, actual_x, split_count)
+        return _FakeResult("LLMM1")
+
+    def platform_flag(name: str, result: bool):
+        def getter() -> bool:
+            record(name)
+            return result
+
+        return getter
+
+    def policy(**arguments: object) -> bool:
+        record("policy", arguments)
+        if isinstance(scenario.policy_result, BaseException):
+            raise scenario.policy_result
+        return scenario.policy_result
+
+    def aiter_gemm(
+        actual_x: _FakeTensor,
+        actual_weight: _FakeTensor,
+        actual_bias: object | None,
+    ) -> _FakeResult:
+        record("aiter", actual_x, actual_weight, actual_bias)
+        return _FakeResult("aiter")
+
+    vllm = _fake_package("vllm")
+    platforms = _fake_package("vllm.platforms")
+    rocm = ModuleType("vllm.platforms.rocm")
+    rocm.on_gfx936 = platform_flag("on_gfx936", scenario.gfx936)
+    rocm.on_gfx9 = platform_flag("on_gfx9", scenario.gfx9)
+    rocm.on_gfx950 = platform_flag("on_gfx950", scenario.gfx950)
+    rocm.supports_rocm_skinny_gemm = platform_flag(
+        "supports_skinny", scenario.supports_skinny
+    )
+    vllm.platforms = platforms
+    platforms.rocm = rocm
+
+    model_executor = _fake_package("vllm.model_executor")
+    layers = _fake_package("vllm.model_executor.layers")
+    policy_module = ModuleType(
+        "vllm.model_executor.layers.rocm_skinny_policy"
+    )
+    policy_module.is_gfx936_skinny_eligible = policy
+    vllm.model_executor = model_executor
+    model_executor.layers = layers
+    layers.rocm_skinny_policy = policy_module
+
+    aiter = _fake_package("aiter")
+    aiter_ops = _fake_package("aiter.ops")
+    aiter_triton = _fake_package("aiter.ops.triton")
+    aiter_gemm_module = ModuleType("aiter.ops.triton.gemm_a16w16")
+    aiter_gemm_module.gemm_a16w16 = aiter_gemm
+    aiter.ops = aiter_ops
+    aiter_ops.triton = aiter_triton
+    aiter_triton.gemm_a16w16 = aiter_gemm_module
+
+    fake_modules = {
+        "vllm": vllm,
+        "vllm.platforms": platforms,
+        "vllm.platforms.rocm": rocm,
+        "vllm.model_executor": model_executor,
+        "vllm.model_executor.layers": layers,
+        "vllm.model_executor.layers.rocm_skinny_policy": policy_module,
+        "aiter": aiter,
+        "aiter.ops": aiter_ops,
+        "aiter.ops.triton": aiter_triton,
+        "aiter.ops.triton.gemm_a16w16": aiter_gemm_module,
+    }
+    saved_modules = _snapshot_modules(_STUBBED_MODULE_NAMES)
+    try:
+        sys.modules.update(fake_modules)
+        namespace = {
+            "torch": SimpleNamespace(
+                float16=float16,
+                bfloat16=bfloat16,
+                nn=SimpleNamespace(
+                    functional=SimpleNamespace(linear=stock_linear)
+                ),
+            ),
+            "envs": SimpleNamespace(
+                FDU_FORCE_STOCK_GEMM=scenario.force_stock,
+                VLLM_ROCM_USE_SKINNY_GEMM=scenario.use_skinny,
+            ),
+            "ops": SimpleNamespace(
+                wvSplitKrc=wvsplitkrc,
+                wvSplitK=wvsplitk,
+                LLMM1=llmm1,
+            ),
+            "num_compute_units": num_compute_units,
+            "use_aiter_triton_gemm": use_aiter_triton_gemm,
+        }
+        dispatch = _compile_dispatch(namespace)
+        result = dispatch(x, weight, scenario.bias)
+        return _DispatchRun(result=result, events=events, x=x, weight=weight)
+    finally:
+        _restore_modules(saved_modules)
+
+
+def _event_names(run: _DispatchRun) -> list[object]:
+    return [event[0] for event in run.events]
 
 
 class EnvContractTest(unittest.TestCase):
@@ -297,6 +578,187 @@ is_gfx936_skinny_eligible(
         self.assertFalse(
             any(isinstance(node, ast.Try) for node in ast.walk(self.function))
         )
+
+
+class DispatchSemanticsTest(unittest.TestCase):
+    def test_force_stock_short_circuits_all_accelerated_dispatch(self) -> None:
+        run = _run_dispatch(
+            _DispatchScenario(
+                force_stock=True,
+                gfx936=True,
+                policy_result=True,
+                aiter_result=True,
+            )
+        )
+
+        self.assertEqual(run.result.origin, "stock")
+        self.assertEqual(_event_names(run), ["stock"])
+        self.assertIs(run.events[0][1], run.x)
+        self.assertIs(run.events[0][2], run.weight)
+        self.assertIsNone(run.events[0][3])
+
+    def test_gfx936_empty_policy_falls_back_without_custom_ops(self) -> None:
+        run = _run_dispatch(
+            _DispatchScenario(gfx936=True, policy_result=False)
+        )
+
+        self.assertEqual(run.result.origin, "stock")
+        self.assertEqual(
+            _event_names(run),
+            [
+                "cu",
+                "on_gfx950",
+                "aiter_select",
+                "supports_skinny",
+                "on_gfx936",
+                "policy",
+                "stock",
+            ],
+        )
+        policy_event = run.events[5]
+        self.assertEqual(
+            policy_event[1],
+            {
+                "n": 1,
+                "m": 4096,
+                "k": 4096,
+                "dtype_name": "bfloat16",
+                "bias_present": False,
+                "weight_contiguous": True,
+                "activation_reshapeable": True,
+            },
+        )
+        self.assertNotIn("wvSplitK", _event_names(run))
+        self.assertNotIn("LLMM1", _event_names(run))
+
+    def test_gfx936_true_policy_reaches_wvsplitk_for_batches_one_to_four(
+        self,
+    ) -> None:
+        for n in range(1, 5):
+            with self.subTest(n=n):
+                run = _run_dispatch(
+                    _DispatchScenario(
+                        gfx936=True,
+                        policy_result=True,
+                        n=n,
+                    )
+                )
+
+                self.assertEqual(run.result.origin, "wvSplitK")
+                self.assertEqual(
+                    _event_names(run),
+                    [
+                        "cu",
+                        "on_gfx950",
+                        "aiter_select",
+                        "supports_skinny",
+                        "on_gfx936",
+                        "policy",
+                        "cu",
+                        "wvSplitK",
+                    ],
+                )
+                self.assertEqual(run.events[5][1]["n"], n)
+                self.assertEqual(
+                    run.events[7],
+                    ("wvSplitK", run.weight, run.x, 120, None),
+                )
+                self.assertEqual(run.result.reshape_calls, [(n, 4096)])
+
+    def test_unsupported_capability_returns_stock(self) -> None:
+        run = _run_dispatch(
+            _DispatchScenario(
+                supports_skinny=False,
+                gfx936=False,
+                gfx9=False,
+                policy_result=True,
+            )
+        )
+
+        self.assertEqual(run.result.origin, "stock")
+        self.assertEqual(
+            _event_names(run),
+            [
+                "cu",
+                "on_gfx950",
+                "aiter_select",
+                "supports_skinny",
+                "stock",
+            ],
+        )
+
+    def test_legacy_gfx9_path_reaches_existing_wvsplitk(self) -> None:
+        run = _run_dispatch(
+            _DispatchScenario(gfx936=False, gfx9=True, policy_result=False)
+        )
+
+        self.assertEqual(run.result.origin, "wvSplitK")
+        self.assertEqual(
+            _event_names(run),
+            [
+                "cu",
+                "on_gfx950",
+                "aiter_select",
+                "supports_skinny",
+                "on_gfx936",
+                "on_gfx9",
+                "cu",
+                "wvSplitK",
+            ],
+        )
+        self.assertEqual(
+            run.events[7], ("wvSplitK", run.weight, run.x, 120, None)
+        )
+
+    def test_aiter_precedes_gfx936_small_batch_dispatch(self) -> None:
+        run = _run_dispatch(
+            _DispatchScenario(
+                gfx936=True,
+                policy_result=True,
+                aiter_result=True,
+            )
+        )
+
+        self.assertEqual(run.result.origin, "aiter")
+        self.assertEqual(
+            _event_names(run),
+            ["cu", "on_gfx950", "aiter_select", "aiter"],
+        )
+
+    def test_wvsplitkrc_precedes_aiter_dispatch(self) -> None:
+        run = _run_dispatch(
+            _DispatchScenario(
+                gfx950=True,
+                aiter_result=True,
+                n=16,
+                m=64,
+                k=1024,
+            )
+        )
+
+        self.assertEqual(run.result.origin, "wvSplitKrc")
+        self.assertEqual(
+            _event_names(run), ["cu", "on_gfx950", "wvSplitKrc"]
+        )
+        self.assertEqual(
+            run.events[2], ("wvSplitKrc", run.x, run.weight, 120, None)
+        )
+
+    def test_stub_modules_are_restored_after_dispatch_exception(self) -> None:
+        before = _snapshot_modules(_STUBBED_MODULE_NAMES)
+
+        with self.assertRaisesRegex(RuntimeError, "expected policy failure"):
+            _run_dispatch(
+                _DispatchScenario(
+                    gfx936=True,
+                    policy_result=RuntimeError("expected policy failure"),
+                )
+            )
+
+        after = _snapshot_modules(_STUBBED_MODULE_NAMES)
+        for name in _STUBBED_MODULE_NAMES:
+            with self.subTest(module=name):
+                self.assertIs(after[name], before[name])
 
 
 class PlatformIsolationContractTest(unittest.TestCase):
