@@ -122,11 +122,19 @@ def use_aiter_triton_gemm(n, m, k, dtype):
 def rocm_unquantized_gemm_impl(
     x: torch.Tensor, weight: torch.Tensor, bias: torch.Tensor | None = None
 ) -> torch.Tensor:
-    from vllm.platforms.rocm import on_gfx9, on_gfx950
+    from vllm.platforms.rocm import (
+        on_gfx936,
+        on_gfx9,
+        on_gfx950,
+        supports_rocm_skinny_gemm,
+    )
 
     n = x.numel() // x.size(-1)
     m = weight.shape[0]
     k = weight.shape[1]
+
+    if envs.FDU_FORCE_STOCK_GEMM:
+        return torch.nn.functional.linear(x, weight, bias)
 
     cu_count = num_compute_units()
 
@@ -169,10 +177,28 @@ def rocm_unquantized_gemm_impl(
 
     use_skinny = (
         envs.VLLM_ROCM_USE_SKINNY_GEMM
-        and on_gfx9()
+        and supports_rocm_skinny_gemm()
         and x.dtype in [torch.float16, torch.bfloat16]
+        and weight.dtype == x.dtype
         and k % 8 == 0
     )
+
+    if use_skinny and on_gfx936():
+        from vllm.model_executor.layers.rocm_skinny_policy import (
+            is_gfx936_skinny_eligible,
+        )
+
+        use_skinny = is_gfx936_skinny_eligible(
+            n=n,
+            m=m,
+            k=k,
+            dtype_name=str(x.dtype).removeprefix("torch."),
+            bias_present=bias is not None,
+            weight_contiguous=weight.is_contiguous(),
+            activation_reshapeable=x.size(-1) == k,
+        )
+    elif use_skinny:
+        use_skinny = on_gfx9()
 
     if use_skinny is not True:
         return torch.nn.functional.linear(x, weight, bias)

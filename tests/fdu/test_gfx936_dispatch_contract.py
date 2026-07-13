@@ -1,0 +1,322 @@
+from __future__ import annotations
+
+import ast
+import os
+import unittest
+from pathlib import Path
+from unittest import mock
+
+
+ROOT = Path(__file__).resolve().parents[2]
+ENVS_PATH = ROOT / "vllm/envs.py"
+UTILS_PATH = ROOT / "vllm/model_executor/layers/utils.py"
+ROCM_PATH = ROOT / "vllm/platforms/rocm.py"
+
+
+def _parse(path: Path) -> tuple[str, ast.Module]:
+    text = path.read_text()
+    return text, ast.parse(text)
+
+
+def _function(tree: ast.Module, name: str) -> ast.FunctionDef:
+    matches = [
+        node
+        for node in tree.body
+        if isinstance(node, ast.FunctionDef) and node.name == name
+    ]
+    if len(matches) != 1:
+        raise AssertionError(
+            f"expected one function named {name}, found {len(matches)}"
+        )
+    return matches[0]
+
+
+def _assignment_index(function: ast.FunctionDef, name: str) -> int:
+    for index, node in enumerate(function.body):
+        if isinstance(node, ast.Assign) and any(
+            isinstance(target, ast.Name) and target.id == name
+            for target in node.targets
+        ):
+            return index
+    raise AssertionError(f"missing top-level assignment to {name}")
+
+
+def _dotted_name(node: ast.AST) -> str | None:
+    if isinstance(node, ast.Name):
+        return node.id
+    if isinstance(node, ast.Attribute):
+        prefix = _dotted_name(node.value)
+        if prefix is not None:
+            return f"{prefix}.{node.attr}"
+    return None
+
+
+def _calls(node: ast.AST, name: str) -> list[ast.Call]:
+    return [
+        candidate
+        for candidate in ast.walk(node)
+        if isinstance(candidate, ast.Call) and _dotted_name(candidate.func) == name
+    ]
+
+
+def _expression(source: str) -> ast.expr:
+    return ast.parse(source, mode="eval").body
+
+
+def _assignment_value(source: str) -> ast.expr:
+    assignment = ast.parse(source).body[0]
+    if not isinstance(assignment, ast.Assign):
+        raise AssertionError("test helper expected an assignment")
+    return assignment.value
+
+
+class EnvContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text, cls.tree = _parse(ENVS_PATH)
+
+    def test_stock_gemm_rollback_flag_has_typed_false_default(self) -> None:
+        declarations = [
+            node
+            for node in ast.walk(self.tree)
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "FDU_FORCE_STOCK_GEMM"
+        ]
+        self.assertEqual(len(declarations), 1)
+        declaration = declarations[0]
+        self.assertEqual(
+            ast.dump(declaration.annotation), ast.dump(ast.Name(id="bool"))
+        )
+        self.assertIsInstance(declaration.value, ast.Constant)
+        self.assertIs(declaration.value.value, False)
+
+    def test_stock_gemm_rollback_flag_registry_contract(self) -> None:
+        registries = [
+            node
+            for node in self.tree.body
+            if isinstance(node, ast.AnnAssign)
+            and isinstance(node.target, ast.Name)
+            and node.target.id == "environment_variables"
+        ]
+        self.assertEqual(len(registries), 1)
+        registry = registries[0]
+        self.assertIsInstance(registry.value, ast.Dict)
+        entries = {
+            key.value: value
+            for key, value in zip(registry.value.keys, registry.value.values)
+            if isinstance(key, ast.Constant) and isinstance(key.value, str)
+        }
+        self.assertTrue(
+            "FDU_FORCE_STOCK_GEMM" in entries,
+            "missing FDU_FORCE_STOCK_GEMM environment registry entry",
+        )
+        getter = entries["FDU_FORCE_STOCK_GEMM"]
+        expected = _expression(
+            'lambda: os.getenv("FDU_FORCE_STOCK_GEMM", "False").lower() '
+            'in ("true", "1")'
+        )
+        self.assertEqual(
+            ast.dump(getter, include_attributes=False),
+            ast.dump(expected, include_attributes=False),
+        )
+
+        compiled_getter = eval(
+            compile(
+                ast.fix_missing_locations(ast.Expression(getter)),
+                ENVS_PATH,
+                "eval",
+            ),
+            {"os": os},
+        )
+        with mock.patch.dict(os.environ, {}, clear=True):
+            self.assertFalse(compiled_getter())
+        for enabled_value in ("true", "1"):
+            with self.subTest(enabled_value=enabled_value):
+                with mock.patch.dict(
+                    os.environ,
+                    {"FDU_FORCE_STOCK_GEMM": enabled_value},
+                    clear=True,
+                ):
+                    self.assertTrue(compiled_getter())
+
+
+class DispatchContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.text, cls.tree = _parse(UTILS_PATH)
+        cls.function = _function(cls.tree, "rocm_unquantized_gemm_impl")
+
+    def test_dispatch_imports_narrow_rocm_capabilities(self) -> None:
+        imports = [
+            node
+            for node in self.function.body
+            if isinstance(node, ast.ImportFrom)
+            and node.module == "vllm.platforms.rocm"
+        ]
+        self.assertEqual(len(imports), 1)
+        self.assertEqual(
+            {alias.name for alias in imports[0].names},
+            {"on_gfx936", "on_gfx9", "on_gfx950", "supports_rocm_skinny_gemm"},
+        )
+
+    def test_stock_rollback_precedes_all_custom_dispatch(self) -> None:
+        shape_indices = {
+            name: _assignment_index(self.function, name) for name in ("n", "m", "k")
+        }
+        guard_indices = [
+            index
+            for index, node in enumerate(self.function.body)
+            if isinstance(node, ast.If)
+            and ast.dump(node.test, include_attributes=False)
+            == ast.dump(
+                _expression("envs.FDU_FORCE_STOCK_GEMM"),
+                include_attributes=False,
+            )
+        ]
+        self.assertEqual(len(guard_indices), 1)
+        guard_index = guard_indices[0]
+        self.assertEqual(guard_index, max(shape_indices.values()) + 1)
+        guard = self.function.body[guard_index]
+        self.assertIsInstance(guard, ast.If)
+        self.assertEqual(len(guard.body), 1)
+        self.assertIsInstance(guard.body[0], ast.Return)
+        expected_return = _expression("torch.nn.functional.linear(x, weight, bias)")
+        self.assertEqual(
+            ast.dump(guard.body[0].value, include_attributes=False),
+            ast.dump(expected_return, include_attributes=False),
+        )
+
+        later_calls = []
+        for name in (
+            "num_compute_units",
+            "ops.wvSplitKrc",
+            "gemm_a16w16",
+            "ops.wvSplitK",
+            "ops.LLMM1",
+        ):
+            later_calls.extend(_calls(self.function, name))
+        self.assertTrue(later_calls)
+        self.assertLess(guard.lineno, min(call.lineno for call in later_calls))
+
+    def test_skinny_base_predicate_is_capability_and_dtype_guarded(self) -> None:
+        use_skinny_index = _assignment_index(self.function, "use_skinny")
+        assignment = self.function.body[use_skinny_index]
+        self.assertIsInstance(assignment, ast.Assign)
+        expected = _assignment_value(
+            """
+use_skinny = (
+    envs.VLLM_ROCM_USE_SKINNY_GEMM
+    and supports_rocm_skinny_gemm()
+    and x.dtype in [torch.float16, torch.bfloat16]
+    and weight.dtype == x.dtype
+    and k % 8 == 0
+)
+"""
+        )
+        self.assertEqual(
+            ast.dump(assignment.value, include_attributes=False),
+            ast.dump(expected, include_attributes=False),
+        )
+
+    def test_gfx936_policy_guards_wvsplitk(self) -> None:
+        expected_test = _expression("use_skinny and on_gfx936()")
+        gfx936_branches = [
+            node
+            for node in self.function.body
+            if isinstance(node, ast.If)
+            and ast.dump(node.test, include_attributes=False)
+            == ast.dump(expected_test, include_attributes=False)
+        ]
+        self.assertEqual(len(gfx936_branches), 1)
+        gfx936_branch = gfx936_branches[0]
+
+        policy_imports = [
+            node
+            for node in gfx936_branch.body
+            if isinstance(node, ast.ImportFrom)
+            and node.module
+            == "vllm.model_executor.layers.rocm_skinny_policy"
+        ]
+        self.assertEqual(len(policy_imports), 1)
+        self.assertEqual(
+            [alias.name for alias in policy_imports[0].names],
+            ["is_gfx936_skinny_eligible"],
+        )
+        policy_calls = _calls(gfx936_branch, "is_gfx936_skinny_eligible")
+        self.assertEqual(len(policy_calls), 1)
+        policy_call = policy_calls[0]
+        expected_policy_call = _expression(
+            """
+is_gfx936_skinny_eligible(
+    n=n,
+    m=m,
+    k=k,
+    dtype_name=str(x.dtype).removeprefix("torch."),
+    bias_present=bias is not None,
+    weight_contiguous=weight.is_contiguous(),
+    activation_reshapeable=x.size(-1) == k,
+)
+"""
+        )
+        self.assertEqual(
+            ast.dump(policy_call, include_attributes=False),
+            ast.dump(expected_policy_call, include_attributes=False),
+        )
+
+        wvsplitk_calls = _calls(self.function, "ops.wvSplitK")
+        self.assertEqual(len(wvsplitk_calls), 1)
+        self.assertLess(policy_call.lineno, wvsplitk_calls[0].lineno)
+
+    def test_non_gfx936_skinny_dispatch_remains_on_gfx9(self) -> None:
+        expected_test = _expression("use_skinny and on_gfx936()")
+        gfx936_branches = [
+            node
+            for node in self.function.body
+            if isinstance(node, ast.If)
+            and ast.dump(node.test, include_attributes=False)
+            == ast.dump(expected_test, include_attributes=False)
+        ]
+        self.assertEqual(len(gfx936_branches), 1)
+        gfx936_branch = gfx936_branches[0]
+        self.assertEqual(len(gfx936_branch.orelse), 1)
+        original_arch_branch = gfx936_branch.orelse[0]
+        self.assertIsInstance(original_arch_branch, ast.If)
+        self.assertEqual(
+            ast.dump(original_arch_branch.test, include_attributes=False),
+            ast.dump(_expression("use_skinny"), include_attributes=False),
+        )
+        self.assertEqual(len(original_arch_branch.body), 1)
+        expected_assignment = ast.parse("use_skinny = on_gfx9()").body[0]
+        self.assertEqual(
+            ast.dump(original_arch_branch.body[0], include_attributes=False),
+            ast.dump(expected_assignment, include_attributes=False),
+        )
+
+    def test_dispatch_does_not_swallow_gpu_exceptions(self) -> None:
+        self.assertFalse(
+            any(isinstance(node, ast.Try) for node in ast.walk(self.function))
+        )
+
+
+class PlatformIsolationContractTest(unittest.TestCase):
+    def test_gfx936_stays_out_of_global_gfx9_and_mi300_predicates(self) -> None:
+        text, tree = _parse(ROCM_PATH)
+        for assignment_name in ("_ON_GFX9", "_ON_MI3XX"):
+            assignments = [
+                node
+                for node in tree.body
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == assignment_name
+                    for target in node.targets
+                )
+            ]
+            self.assertEqual(len(assignments), 1)
+            expression = ast.get_source_segment(text, assignments[0].value)
+            self.assertIsNotNone(expression)
+            self.assertNotIn("gfx936", expression)
+
+
+if __name__ == "__main__":
+    unittest.main()
