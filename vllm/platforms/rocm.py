@@ -17,6 +17,7 @@ from vllm.utils.torch_utils import cuda_device_count_stateless
 from vllm.v1.attention.backends.registry import AttentionBackendEnum
 
 from .interface import DeviceCapability, Platform, PlatformEnum
+from .rocm_capabilities import is_gfx936_arch, supports_rocm_skinny_gemm_arch
 
 if TYPE_CHECKING:
     from vllm.config import VllmConfig
@@ -147,6 +148,8 @@ _GCN_ARCH = _get_gcn_arch()
 _ON_GFX1X = any(arch in _GCN_ARCH for arch in ["gfx11", "gfx12"])
 _ON_MI3XX = any(arch in _GCN_ARCH for arch in ["gfx942", "gfx950"])
 _ON_GFX9 = any(arch in _GCN_ARCH for arch in ["gfx90a", "gfx942", "gfx950"])
+_ON_GFX936 = is_gfx936_arch(_GCN_ARCH)
+_SUPPORTS_ROCM_SKINNY_GEMM = supports_rocm_skinny_gemm_arch(_GCN_ARCH)
 _ON_GFX942 = "gfx942" in _GCN_ARCH
 _ON_GFX950 = "gfx950" in _GCN_ARCH
 
@@ -232,6 +235,14 @@ def on_mi3xx() -> bool:
 
 def on_gfx9() -> bool:
     return _ON_GFX9
+
+
+def on_gfx936() -> bool:
+    return _ON_GFX936
+
+
+def supports_rocm_skinny_gemm() -> bool:
+    return _SUPPORTS_ROCM_SKINNY_GEMM
 
 
 def on_gfx942() -> bool:
