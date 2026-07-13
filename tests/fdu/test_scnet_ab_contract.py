@@ -58,6 +58,7 @@ class ScnetAbContractTest(unittest.TestCase):
         self.assertIn("VLLM_ROCM_USE_SKINNY_GEMM=1", self.text)
         self.assertIn("--dtype bfloat16", self.text)
         self.assertIn("--require-arch gfx936", self.text)
+        self.assertIn("unset HSA_OVERRIDE_GFX_VERSION ROCBLAS_LAYER PYTHONPATH", self.text)
 
 
 if __name__ == "__main__":

@@ -15,6 +15,11 @@ SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
 REPO_ROOT="$(cd "$SCRIPT_DIR/.." && pwd -P)"
 SOURCE_ROOT="$EXPERIMENT_ROOT/source"
 
+export FDU_ENABLE=0
+export VLLM_ROCM_USE_AITER=0
+export VLLM_ROCM_USE_SKINNY_GEMM=1
+unset HSA_OVERRIDE_GFX_VERSION ROCBLAS_LAYER PYTHONPATH
+
 usage() {
     echo "usage: $0 {init|build-control|bench|build-candidate|start-control|start-candidate-stock|start-candidate|stop|probe|throughput|accuracy} [args]" >&2
     exit 2
@@ -184,6 +189,10 @@ accuracy() {
     mkdir -p "$destination"
     (cd "$scratch" && ./run_accuracy.sh "$task" "$count") \
         2>&1 | tee "$destination/run.log"
+    if [[ -d "$scratch/test" ]]; then
+        mkdir -p "$destination/test"
+        cp -a "$scratch/test/." "$destination/test/"
+    fi
     if [[ -d "$scratch/outputs" ]]; then cp -a "$scratch/outputs/." "$destination/"; fi
     if [[ -d "$scratch/accuracy_debug" ]]; then cp -a "$scratch/accuracy_debug/." "$destination/"; fi
 }
