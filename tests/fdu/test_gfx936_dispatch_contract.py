@@ -631,39 +631,26 @@ class DispatchSemanticsTest(unittest.TestCase):
         self.assertNotIn("wvSplitK", _event_names(run))
         self.assertNotIn("LLMM1", _event_names(run))
 
-    def test_gfx936_true_policy_reaches_wvsplitk_for_batches_one_to_four(
-        self,
-    ) -> None:
-        for n in range(1, 5):
-            with self.subTest(n=n):
-                run = _run_dispatch(
-                    _DispatchScenario(
-                        gfx936=True,
-                        policy_result=True,
-                        n=n,
-                    )
-                )
+    def test_gfx936_true_policy_reaches_llmm1_for_measured_n1(self) -> None:
+        run = _run_dispatch(
+            _DispatchScenario(gfx936=True, policy_result=True, n=1)
+        )
 
-                self.assertEqual(run.result.origin, "wvSplitK")
-                self.assertEqual(
-                    _event_names(run),
-                    [
-                        "cu",
-                        "on_gfx950",
-                        "aiter_select",
-                        "supports_skinny",
-                        "on_gfx936",
-                        "policy",
-                        "cu",
-                        "wvSplitK",
-                    ],
-                )
-                self.assertEqual(run.events[5][1]["n"], n)
-                self.assertEqual(
-                    run.events[7],
-                    ("wvSplitK", run.weight, run.x, 120, None),
-                )
-                self.assertEqual(run.result.reshape_calls, [(n, 4096)])
+        self.assertEqual(run.result.origin, "LLMM1")
+        self.assertEqual(
+            _event_names(run),
+            [
+                "cu",
+                "on_gfx950",
+                "aiter_select",
+                "supports_skinny",
+                "on_gfx936",
+                "policy",
+                "LLMM1",
+            ],
+        )
+        self.assertEqual(run.events[6], ("LLMM1", run.weight, run.x, 4))
+        self.assertEqual(run.result.reshape_calls, [(1, 4096)])
 
     def test_unsupported_capability_returns_stock(self) -> None:
         run = _run_dispatch(

@@ -183,7 +183,7 @@ class RocmSkinnyPolicyTest(unittest.TestCase):
             parent.__path__ = [str(path)]
             sys.modules[name] = parent
 
-        _load_module(
+        cls.shapes = _load_module(
             child_module_names[0],
             ROOT / "vllm/model_executor/layers/rocm_skinny_shapes.py",
         )
@@ -231,6 +231,24 @@ class RocmSkinnyPolicyTest(unittest.TestCase):
                 validated_shapes=passing,
             )
         )
+
+    def test_committed_whitelist_contains_only_measured_llmm1_shapes(self) -> None:
+        self.assertEqual(
+            self.shapes.VALIDATED_GFX936_SHAPES,
+            frozenset(
+                {
+                    (1, 16384, 5120, "bfloat16", False),
+                    (1, 96, 5120, "bfloat16", False),
+                    (1, 14336, 5120, "bfloat16", False),
+                    (1, 5120, 6144, "bfloat16", False),
+                    (1, 34816, 5120, "bfloat16", False),
+                }
+            ),
+        )
+
+    def test_rejects_unmeasured_multirow_batches(self) -> None:
+        self.assertFalse(self._eligible(n=2))
+        self.assertFalse(self._eligible(n=4))
 
     def test_rejects_unsupported_batch_size(self) -> None:
         self.assertFalse(self._eligible(n=5))

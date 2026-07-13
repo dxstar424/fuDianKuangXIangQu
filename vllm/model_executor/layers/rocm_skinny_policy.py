@@ -5,7 +5,7 @@ from typing import AbstractSet
 from .rocm_skinny_shapes import VALIDATED_GFX936_SHAPES, SkinnyShape
 
 
-SUPPORTED_BATCH_SIZES = frozenset({1, 2, 4})
+SUPPORTED_BATCH_SIZES = frozenset({1})
 SUPPORTED_DTYPES = frozenset({"bfloat16", "float16"})
 
 

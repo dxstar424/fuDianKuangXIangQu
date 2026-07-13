@@ -183,12 +183,13 @@ def rocm_unquantized_gemm_impl(
         and k % 8 == 0
     )
 
+    use_gfx936_llmm1 = False
     if use_skinny and on_gfx936():
         from vllm.model_executor.layers.rocm_skinny_policy import (
             is_gfx936_skinny_eligible,
         )
 
-        use_skinny = is_gfx936_skinny_eligible(
+        use_gfx936_llmm1 = is_gfx936_skinny_eligible(
             n=n,
             m=m,
             k=k,
@@ -197,6 +198,7 @@ def rocm_unquantized_gemm_impl(
             weight_contiguous=weight.is_contiguous(),
             activation_reshapeable=x.size(-1) == k,
         )
+        use_skinny = use_gfx936_llmm1
     elif use_skinny:
         use_skinny = on_gfx9()
 
@@ -204,7 +206,10 @@ def rocm_unquantized_gemm_impl(
         return torch.nn.functional.linear(x, weight, bias)
 
     x_view = x.reshape(-1, x.size(-1))
-    if m > 8 and 0 < n <= 4:
+    if use_gfx936_llmm1:
+        out = ops.LLMM1(weight, x_view, 4)
+        return out.reshape(*x.shape[:-1], weight.shape[0])
+    elif m > 8 and 0 < n <= 4:
         cu_count = num_compute_units()
         out = ops.wvSplitK(weight, x_view, cu_count, bias)
         return out.reshape(*x.shape[:-1], weight.shape[0])
