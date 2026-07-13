@@ -1,45 +1,33 @@
-# ============================================================
-# FDU SCCSCC26 - 可调参数声明（合规）
-# v1.1.0: AWQ INT4 pre-quantization at startup + native vLLM AWQ
-# ============================================================
-
+# FDU SCCSCC26 active submission defaults: native gfx936, BF16 weights.
 phase: 1
 
-# v1.1.0: 启动时预量化 bf16 → AWQ INT4, vLLM 原生 AWQ pipeline
-#   pre_quantize.py: 读 bf16 safetensors → 量化 → 写入 /tmp/awq_model/
-#   vLLM: --model /tmp/awq_model --quantization awq（原生 AWQ 加载, 无 hack）
-#   AWQ Triton kernels: VLLM_USE_TRITON_AWQ=1 → 融合 dequant+matmul
-#   4x weight IO reduction: 13.5GB INT4 vs 54GB bf16 per decode
-weight_quantization:
-  enabled: true
-  method: "awq"
-  bits: 4
-  group_size: 128
-  zero_point: true
-  mechanism: "pre-quantize at startup → native vLLM AWQ pipeline"
+runtime:
+  architecture: "gfx936"
+  dtype: "bfloat16"
+  require_installed_wheel: true
 
+# The active launch path sets FDU_ENABLE=0. These values keep every legacy
+# plugin hook off even if this file is inspected by a diagnostic tool.
 kv_cache:
   strategy: "none"
   block_size: 16
-  gpu_memory_utilization: 0.95
+  gpu_memory_utilization: 0.94
   enable_kv_quant: false
-  kv_quant_dtype: "fp8"
+  kv_quant_dtype: "bfloat16"
   defrag_threshold: 0.7
 
 attention:
   backend: "vllm_default"
   use_paged_attention: true
-  num_kv_heads: 32
-  num_q_heads: 64
-
-fp8_weight_quant:
-  enabled: false
+  enable_gqa_opt: false
 
 executor:
-  enable_prefix_caching: true
-  use_cuda_graph: true
-  cuda_graph_max_bs: 8
+  enable_prefix_caching: false
+  use_cuda_graph: false
+  enable_hip_graph: false
 
 precision:
+  weight_dtype: "bfloat16"
+  online_weight_conversion: false
   enforce_accuracy_check: true
   accuracy_tolerance: 0.01

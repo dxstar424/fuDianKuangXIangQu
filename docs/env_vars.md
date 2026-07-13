@@ -1,51 +1,38 @@
-# 环境变量说明（评测提交必填）
+# gfx936 BF16 运行环境变量
 
-> v0.8.0: bitsandbytes INT4 在线量化 — 源码级默认值，不依赖 CLI flag
+> 当前提交路径只使用原生 `gfx936` 和 BF16 权重。历史量化模块保留于仓库作实验记录，启动链不会激活它们。
 
-## v0.8.0 核心策略 ★★★
+## 活跃变量
 
-**不依赖 `--quantization` CLI flag（v0.7.0 教训：平台评测机覆盖 CLI flag）**
-**而是直接修改 vLLM 源码文件，改变默认行为：**
+| 变量 | 默认值 | 作用 |
+|---|---:|---|
+| `HIP_VISIBLE_DEVICES` | `0` | 选择单 DCU |
+| `PYTORCH_HIP_ALLOC_CONF` | `expandable_segments:True` | 减少显存碎片 |
+| `SAFETENSORS_FAST_GPU` | `1` | 快速读取模型权重 |
+| `VLLM_ROCM_USE_SKINNY_GEMM` | `1` | 允许 ROCm skinny GEMM 调度 |
+| `FDU_FORCE_STOCK_GEMM` | `0` | 设为 `1` 立即回退原生 BF16 linear |
+| `VLLM_ROCM_USE_AITER` | `0` | 隔离 AITER，保持 A/B 单变量 |
+| `FDU_ENABLE` | `0` | 关闭历史 FDU 插件钩子 |
+| `FDU_CACHE_ROOT` | `/public/home/xdzs2026_c415/cache` | SCNet 持久缓存根目录 |
 
-| 文件 | 修改 |
-|------|------|
-| `vllm/config/model.py` | `quantization` 默认值: `None` → `"bitsandbytes"` |
-| `vllm/.../bitsandbytes.py` | `bnb_4bit_compute_dtype`: `"float32"` → `"bfloat16"`, `quant_type`: `"fp4"` → `"nf4"` |
+`scripts/rocm_env.sh` 会主动 `unset HSA_OVERRIDE_GFX_VERSION ROCBLAS_LAYER`。不允许架构伪装，也不开 rocBLAS profiling。
 
-Docker build 时 COPY 修改后的 `.py` 文件覆盖 base image 的 vLLM 安装。
-评测机使用我们的 Docker 镜像 → 自动使用 bitsandbytes INT4 量化 → 无法覆盖。
+## 启动前门禁
 
-### 权重量化（源码级强制）
+`launch.sh` 在模型加载前调用 `scripts/preflight_rocm.py`，并要求：
 
-| 机制 | 详情 |
-|------|------|
-| 量化方法 | bitsandbytes 4-bit (nf4) |
-| 触发方式 | vLLM 源码默认值（非 CLI flag） |
-| 计算精度 | bfloat16 |
-| 权重 IO 缩减 | 54GB → ~14GB（4x） |
+- Python、`vllm` 和扩展模块都来自当前安装 venv；
+- 原生架构为 `gfx936`；
+- `vllm._C` 与 `vllm._rocm_C` 可加载；
+- `wvSplitK` 和 `LLMM1` 符号存在。
 
-### AITER / attention
+任一项不符合都在读取 Qwen3.5-27B 前失败。`launch.sh` 在启动服务前清空 `PYTHONPATH`，避免仓库内源码覆盖已安装 wheel。
 
-| 变量名 | 值 | 作用 |
-|--------|-----|------|
-| `VLLM_ROCM_USE_AITER` | **1** | 启用 AITER HIP FlashAttention |
-| `VLLM_ROCM_USE_AITER_UNIFIED_ATTENTION` | **不设** | Skip Triton unified, use HIP CK FA |
-| `VLLM_ROCM_USE_SKINNY_GEMM` | **1** | Decode GEMV HIP kernel |
-| `VLLM_ROCM_USE_AITER_RMSNORM` | **1** | AITER RMSNorm |
+## 回滚
 
-### ROCm 系统
+```bash
+export FDU_FORCE_STOCK_GEMM=1
+bash launch.sh
+```
 
-| 变量名 | 值 | 作用 |
-|--------|-----|------|
-| `HSA_OVERRIDE_GFX_VERSION` | `9.4.2` | gfx942 |
-| `HIP_VISIBLE_DEVICES` | `0` | DCU |
-| `GPU_MEMORY_UTILIZATION` | `0.95` | 显存 |
-| `ROCBLAS_LAYER` | `4` | rocBLAS 自调优 |
-| `MIOPEN_FIND_MODE` | `1` | MIOpen 自调优 |
-
-## 机制
-
-1. Docker build → pip install bitsandbytes → COPY patched .py files 覆盖 vLLM 源码
-2. 评测机启动容器 → vLLM 读取 ModelConfig → quantization 默认 = "bitsandbytes"
-3. bitsandbytes 在模型加载时将 bf16 权重在线量化为 INT4 (nf4)
-4. 推理时使用 4-bit 权重 → 权重 HBM IO 减少 4x
+该回滚不需要重编 wheel，且不改变 BF16 模型、attention 或 scheduler。

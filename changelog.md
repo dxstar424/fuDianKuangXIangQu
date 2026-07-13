@@ -1,5 +1,18 @@
 # 变更日志
 
+## [v1.2.0-gfx936-bf16] - 2026-07-14
+
+### 原生 gfx936 BF16 窄路径
+
+- 以 `PYTORCH_ROCM_ARCH=gfx936` 构建必需的 `vllm._rocm_C`，无架构伪装。
+- 在 `rocm_unquantized_gemm_impl` 中增加独立 gfx936 判定和精确 shape 白名单；不扩大全局 GFX9/MI300 能力判定。
+- 启动链固定为已安装 wheel、BF16 模型、`FDU_ENABLE=0`、`VLLM_ROCM_USE_AITER=0`。
+- 增加 `FDU_FORCE_STOCK_GEMM=1` 立即回滚，以及模型加载前的 gfx936/扩展符号门禁。
+- 增加直接 kernel microbenchmark、隔离 control/candidate wheel、PID 安全服务、固定探针、官方评测副本和复现评分脚本。
+- 首个可跑分提交：`6af6666`，白名单为空时安全回退 stock BF16。尚未得到 SCNet 实测加速，不声称 90 分。
+
+## 历史实验（非当前启动路径）
+
 ## [v0.8.0] - 2026-07-12
 
 ### ★★★ 强制 INT4 在线量化 — 源码级默认值，不可覆盖 ★★★

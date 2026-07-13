@@ -1,173 +1,114 @@
-# SCNet 跑结果手册（官方 PDF + lutinayi_branch）
+# SCNet gfx936 BF16 流水线
 
-家目录：`/public/home/xdzs2026_c415`（容器重启后数据保留）
+本流程只操作以下持久目录：
 
----
-
-## 两套流程（别混）
-
-| 目的 | 用什么 | 端口 |
-|------|--------|------|
-| **官方 baseline 自测** | PDF `start_vllm.sh`（stock vLLM） | 8001 |
-| **lutinayi 优化版自测** | 仓库 `scnet_start_optimized.sh` → `launch.sh` | 8001 |
-| **正式评测得分** | 竞赛平台提交 `lutinayi_branch`，跑 `launch.sh` | 平台定 |
-
-**禁止再建议或执行 baseline `start_vllm.sh` 自测**（用户只测 `lutinayi_branch` 优化版）。
-
-**baseline 不需要 GitLab 代码。优化版才需要 clone 仓库。**
-
----
-
-## 一、环境准备（PDF 第 7–9 步，家目录执行）
-
-```bash
-cd /public/home/xdzs2026_c415
-
-# 7. vLLM 编译 + 安装（容器重启后重做 install）
-git clone -b v0.18.1 --depth 1 http://developer.sourcefind.cn/codes/OpenDAS/vllm_cscc.git
-cd vllm_cscc
-python setup.py bdist_wheel
-cd dist
-pip install vllm-*.whl --no-deps
-
-# 8. 模型（断点续传：同一路径重跑即可）
-cd /public/home/xdzs2026_c415
-pip install modelscope
-modelscope download --model Qwen/Qwen3.5-27B --local_dir ./Qwen3.5-27B
-cp -r ./Qwen3.5-27B/ /root/Qwen3.5-27B
-
-# 9. testdata
-curl -f -C - -o testdata.tar.gz \
-  https://zzefile.scnet.cn:65011/efile/s/d/c2N5MTE1OTkxMDU1OQ==/a927e65672549b46
-mkdir -p ./testdata
-tar -xzf testdata.tar.gz -C ./testdata --strip-components=1
-chmod +x ./testdata/*.sh
+```text
+/public/home/xdzs2026_c415/experiments/gfx936_skinny
+/public/home/xdzs2026_c415/venvs/vllm_baseline
+/public/home/xdzs2026_c415/venvs/vllm_gfx936
+/public/home/xdzs2026_c415/results/gfx936_skinny
 ```
 
-检查：
+`Qwen3.5-27B` 和 `testdata` 是只读输入。所有官方评测都在 `results/gfx936_skinny/eval_work` 的独立副本中运行。
+
+## 1. 拉取 dx_branch 并确认硬件
 
 ```bash
-du -sh ./Qwen3.5-27B          # 应 ~50G+
-ls ./Qwen3.5-27B/config.json
-ls ./testdata/start_vllm.sh
+export ROOT=/public/home/xdzs2026_c415
+export EXP=$ROOT/experiments/gfx936_skinny
+mkdir -p "$EXP" "$ROOT/results/gfx936_skinny"
+git clone --branch dx_branch --single-branch \
+  https://gitlab.eduxiji.net/fudiankuangxiangqu/2025pra-fdu-fudiankuangxiangqu.git \
+  "$EXP/source"
+cd "$EXP/source"
+git rev-parse HEAD | tee "$ROOT/results/gfx936_skinny/source_commit.txt"
+
+unset HSA_OVERRIDE_GFX_VERSION ROCBLAS_LAYER PYTHONPATH
+rocminfo | sed -n '/Name:.*gfx/,+3p' | head
+python3 - <<'PY'
+import torch
+p = torch.cuda.get_device_properties(0)
+print(torch.__version__, torch.version.hip, p.name, p.gcnArchName, p.multi_processor_count)
+assert p.gcnArchName.split(":", 1)[0] == "gfx936"
+PY
 ```
 
----
-
-## 二、跑官方 baseline（PDF 第 10–11 步）
-
-**终端 1：**
+## 2. 构建空白名单 control，直测 kernel
 
 ```bash
-cd /public/home/xdzs2026_c415/testdata
-./start_vllm.sh
+bash scripts/scnet_ab_gfx936.sh init
+bash scripts/scnet_ab_gfx936.sh build-control
+bash scripts/scnet_ab_gfx936.sh bench
 ```
 
-**终端 2（等服务起来，curl 有 JSON 再测）：**
+`bench` 只在 18 行全部满足以下门禁时写入白名单：余弦相似度 `>=0.999`、相对 L2 `<=0.01`、`assert_close(rtol=0.03, atol=0.5)`、单 shape 中位加速 `>=1.15`、P99 不回退，且 N=1/2/4 的主导 linear 投影加速均 `>=1.6`。
+
+如果命令退出码为 2，保留 `microbench.json` 并停止；不加载大模型。通过后：
 
 ```bash
-curl http://127.0.0.1:8001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"Qwen3.5-27B","messages":[{"role":"user","content":"你好，简单回复一句话。"}],"temperature":0.0,"max_tokens":64}'
-
-cd /public/home/xdzs2026_c415/testdata
-./run_throughput.sh 4-8K 10
-./run_throughput.sh 8-16K 10
-./run_throughput.sh 16-32K 10
-./run_accuracy.sh hotpotqa 10
+git diff -- vllm/model_executor/layers/rocm_skinny_shapes.py
+python3 -m unittest discover -s tests/fdu -p 'test_*.py' -v
+git add vllm/model_executor/layers/rocm_skinny_shapes.py
+git commit -m "perf: admit measured gfx936 skinny shapes"
+git push origin HEAD:dx_branch
+bash scripts/scnet_ab_gfx936.sh build-candidate
 ```
 
-记录每档：**Output throughput、TTFT P99、TPOT P99** → 填 `report.md`
-
----
-
-## 三、跑 lutinayi_branch 优化版
-
-**与第二节 baseline 同一套路径与准备，只把最后一步 `start_vllm.sh` 换成 `launch.sh`。**
-
-### 3.1 代码（只需一次）
+## 3. 同 wheel 探针与吞吐 A/B
 
 ```bash
-cd /public/home/xdzs2026_c415
-git clone -b lutinayi_branch \
-  https://gitlab.eduxiji.net/fudiankuangxiangqu/2025pra-fdu-fudiankuangxiangqu.git
-# 已有仓库则：
-cd 2025pra-fdu-fudiankuangxiangqu && git pull origin lutinayi_branch
-grep -n '<<<<<<' launch.sh config.yaml || echo "OK"
+bash scripts/scnet_ab_gfx936.sh start-candidate-stock
+bash scripts/scnet_ab_gfx936.sh probe candidate-stock
+bash scripts/scnet_ab_gfx936.sh stop
+bash scripts/scnet_ab_gfx936.sh start-candidate
+bash scripts/scnet_ab_gfx936.sh probe candidate
+bash scripts/scnet_ab_gfx936.sh stop
 ```
 
-### 3.2 终端 1（对齐 baseline 第 7–10 步，仅第 10 步不同）
+对比 `probes/candidate-stock.json` 与 `probes/candidate.json` 的 `prompts` 和 `responses`，必须完全一致。
+
+每个模式都按 8–16K、16–32K、4–8K 顺序跑两轮：
 
 ```bash
-# 与 baseline 完全相同
-cp -r /public/home/xdzs2026_c415/Qwen3.5-27B /root/Qwen3.5-27B
-
-cd /public/home/xdzs2026_c415/vllm_cscc
-python setup.py bdist_wheel
-cd dist
-pip install vllm-*.whl --no-deps
-
-# 停 baseline（若在跑）
-pkill -f vllm || true
-sleep 5
-
-# 仅此处与 baseline 不同：launch.sh 替代 start_vllm.sh
-export PROJ=/public/home/xdzs2026_c415/2025pra-fdu-fudiankuangxiangqu
-export MODEL_PATH=/root/Qwen3.5-27B
-export PYTHONPATH=$PROJ/src
-export FDU_PHASE=1
-export DO_WARMUP=0
-bash $PROJ/scripts/scnet_start_optimized.sh
+for round in 1 2; do
+  for mode in control candidate; do
+    bash scripts/scnet_ab_gfx936.sh "start-$mode"
+    for tier in 8-16K 16-32K 4-8K; do
+      bash scripts/scnet_ab_gfx936.sh throughput "$tier" 10 "$mode-r$round"
+    done
+    bash scripts/scnet_ab_gfx936.sh stop
+  done
+done
 ```
 
-日志里应有 `[launch] === Phase 1`，进程为 `python -m fdu_vllm.server`（不是纯 `vllm serve`）。
+继续条件：8–16K 至少提升 50%，其他档不回退，TTFT/TPOT P99 都在 control 的 1.5x 内，且无失败请求。
 
-### 3.3 终端 2（与 baseline 相同 curl + 吞吐）
+## 4. 精度与投影得分
 
 ```bash
-curl http://127.0.0.1:8001/v1/chat/completions \
-  -H "Content-Type: application/json" \
-  -d '{"model":"Qwen3.5-27B","messages":[{"role":"user","content":"你好回复一下"}],"max_tokens":16}'
+for mode in control candidate; do
+  bash scripts/scnet_ab_gfx936.sh "start-$mode"
+  for task in hotpotqa gov_report retrieval_multi_point aggregation_keyword_aggregation; do
+    bash scripts/scnet_ab_gfx936.sh accuracy "$task" 10 "$mode-accuracy"
+  done
+  bash scripts/scnet_ab_gfx936.sh stop
+done
 
-cd /public/home/xdzs2026_c415/testdata
-./run_throughput.sh 8-16K 10
-./run_throughput.sh 4-8K 10
-./run_throughput.sh 16-32K 10
+/public/home/xdzs2026_c415/venvs/vllm_gfx936/bin/python scripts/score_gfx936.py \
+  --results-root /public/home/xdzs2026_c415/results/gfx936_skinny \
+  --control-run control-r1 --control-run control-r2 \
+  --candidate-run candidate-r1 --candidate-run candidate-r2 \
+  --accuracy-coefficient 1.0 \
+  --output /public/home/xdzs2026_c415/results/gfx936_skinny/score.json
 ```
 
-对比 baseline 与优化版三档数字，填 `report.md`。
+任一精度任务降低超过 1% 就拒绝 candidate。未实测前不声称达到 90 分。
 
----
-
-## 四、lutinayi_branch 里有什么
-
-| 文件 | 作用 |
-|------|------|
-| `launch.sh` | 评测机启动入口（warmup + prefix cache + fdu_vllm） |
-| `scripts/scnet_start_optimized.sh` | SCNet 一键启动，端口 8001 |
-| `scripts/gate_check.sh` | 吞吐+精度门禁 |
-| `scripts/warmup_server.py` | 分档 warmup |
-| `src/fdu_vllm/` | 优化插件（KV/GQA/可选 FP8） |
-| `docs/easy_scoring.md` | 提分优先级 |
-
----
-
-## 五、常见问题
-
-| 问题 | 处理 |
-|------|------|
-| `Permission denied` on `*.sh` | `chmod +x testdata/*.sh` |
-| curl 8001 refused | `start_vllm.sh` 没跑完；查 `cp /root/Qwen3.5-27B` |
-| 10/10 failed | 服务未就绪；先 curl 成功再 throughput |
-| 模型 38G | 未下完；`pip install modelscope` 后续传 |
-| `/root/Qwen3.5-27B` 不存在 | 执行 `cp -r ./Qwen3.5-27B/ /root/Qwen3.5-27B` |
-
----
-
-## 六、容器重启后最少重做
+## 5. 紧急回退
 
 ```bash
-cd /public/home/xdzs2026_c415/vllm_cscc/dist && pip install vllm-*.whl --no-deps
-cp -r ./Qwen3.5-27B/ /root/Qwen3.5-27B
-# 然后启动 baseline 或 optimized
+export FDU_FORCE_STOCK_GEMM=1
+bash scripts/scnet_start_optimized.sh
 ```
+
+回退只跳过自定义 linear 调度，不需重编 wheel。禁止使用 `pkill`/`killall`；流水线只终止它自己记录的 PID。

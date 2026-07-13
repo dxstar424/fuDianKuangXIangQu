@@ -1,5 +1,21 @@
 # 优化方案说明文档
 
+## 当前提交路径（2026-07-14）
+
+当前 `dx_branch` 已切换为 **原生 gfx936 + BF16 + 实测 shape 白名单**。不转换、不持久化修改 Qwen3.5-27B 权重，不使用投机解码，不修改调度器锁定参数。
+
+实现状态：
+
+- ROCm 扩展以 `PYTORCH_ROCM_ARCH=gfx936` 编译，不设置 `HSA_OVERRIDE_GFX_VERSION`；
+- 只有 SCNet 直测通过的 `(N,M,K,dtype,bias)` 才进入白名单；
+- 当前仓库白名单初始为空，因此会安全返回 stock BF16 GEMM；
+- `FDU_FORCE_STOCK_GEMM=1` 可不重编立即回滚；
+- 平台可跑分锚点为 `6af6666`；后续性能数据必须由 SCNet 门禁产生。
+
+达到 90 分是 stretch goal，不是已验证结论。未得到实测 wheel hash、18 行 microbenchmark、两轮三档吞吐、P99 SLA 和四项精度结果前，不录入预估加速。
+
+## 历史方案（非当前启动路径）
+
 > 赛程规划：[docs/optimization_roadmap.md](docs/optimization_roadmap.md)  
 > 冲刺攻略：[docs/sprint_strategy_0711.md](docs/sprint_strategy_0711.md)  
 > 官方解读：[docs/official_guidance_interpretation.md](docs/official_guidance_interpretation.md)  
