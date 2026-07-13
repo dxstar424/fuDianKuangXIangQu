@@ -1,13 +1,28 @@
 from __future__ import annotations
 
+import ast
 import importlib.util
-from pathlib import Path
 import sys
-from types import ModuleType
+import tempfile
 import unittest
+from pathlib import Path
+from types import ModuleType
 
 
 ROOT = Path(__file__).resolve().parents[2]
+_MISSING = object()
+
+
+def _snapshot_modules(names: tuple[str, ...]) -> dict[str, object]:
+    return {name: sys.modules.get(name, _MISSING) for name in names}
+
+
+def _restore_modules(saved_modules: dict[str, object]) -> None:
+    for name, saved in reversed(saved_modules.items()):
+        if saved is _MISSING:
+            sys.modules.pop(name, None)
+        else:
+            sys.modules[name] = saved  # type: ignore[assignment]
 
 
 def _load_module(name: str, path: Path) -> ModuleType:
@@ -15,16 +30,116 @@ def _load_module(name: str, path: Path) -> ModuleType:
     if spec is None or spec.loader is None:
         raise RuntimeError(f"Could not load {name} from {path}")
     module = importlib.util.module_from_spec(spec)
+    saved = _snapshot_modules((name,))
     sys.modules[name] = module
-    spec.loader.exec_module(module)
+    try:
+        spec.loader.exec_module(module)
+    except BaseException:
+        _restore_modules(saved)
+        raise
     return module
+
+
+class ModuleIsolationTest(unittest.TestCase):
+    @staticmethod
+    def _restore_entries(saved_modules: dict[str, object]) -> None:
+        for name, saved in saved_modules.items():
+            if saved is _MISSING:
+                sys.modules.pop(name, None)
+            else:
+                sys.modules[name] = saved  # type: ignore[assignment]
+
+    def test_failed_load_restores_preexisting_module(self) -> None:
+        name = "fdu_failing_test_module"
+        saved = {name: sys.modules.get(name, _MISSING)}
+        sentinel = ModuleType(name)
+        sys.modules[name] = sentinel
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "raises.py"
+                path.write_text("raise RuntimeError('expected')\n")
+                with self.assertRaisesRegex(RuntimeError, "expected"):
+                    _load_module(name, path)
+            self.assertIs(sys.modules.get(name), sentinel)
+        finally:
+            self._restore_entries(saved)
+
+    def test_failed_load_removes_new_module(self) -> None:
+        name = "fdu_new_failing_test_module"
+        saved = {name: sys.modules.get(name, _MISSING)}
+        sys.modules.pop(name, None)
+        try:
+            with tempfile.TemporaryDirectory() as directory:
+                path = Path(directory) / "raises.py"
+                path.write_text("raise RuntimeError('expected')\n")
+                with self.assertRaisesRegex(RuntimeError, "expected"):
+                    _load_module(name, path)
+            self.assertNotIn(name, sys.modules)
+        finally:
+            self._restore_entries(saved)
+
+    def test_capability_lifecycle_does_not_leak_module(self) -> None:
+        name = "rocm_capabilities_under_test"
+        saved = {name: sys.modules.get(name, _MISSING)}
+        sys.modules.pop(name, None)
+
+        class LifecycleCase(RocmCapabilitiesTest):
+            pass
+
+        LifecycleCase._class_cleanups = []
+        try:
+            LifecycleCase.setUpClass()
+            LifecycleCase.doClassCleanups()
+            self.assertNotIn(name, sys.modules)
+        finally:
+            LifecycleCase.doClassCleanups()
+            self._restore_entries(saved)
+
+    def test_policy_lifecycle_restores_preexisting_child_modules(self) -> None:
+        module_names = (
+            "vllm",
+            "vllm.model_executor",
+            "vllm.model_executor.layers",
+            "vllm.model_executor.layers.rocm_skinny_shapes",
+            "vllm.model_executor.layers.rocm_skinny_policy",
+        )
+        saved = {
+            name: sys.modules.get(name, _MISSING) for name in module_names
+        }
+        child_names = module_names[-2:]
+        sentinels = {name: ModuleType(name) for name in child_names}
+        sys.modules.update(sentinels)
+
+        class LifecycleCase(RocmSkinnyPolicyTest):
+            @classmethod
+            def setUpClass(cls) -> None:
+                super().setUpClass()
+                raise RuntimeError("expected setup failure")
+
+            def runTest(self) -> None:
+                self.fail("setUpClass failure should prevent this test")
+
+        LifecycleCase._class_cleanups = []
+        try:
+            result = unittest.TestResult()
+            unittest.TestSuite((LifecycleCase(),)).run(result)
+            self.assertEqual(len(result.errors), 1)
+            self.assertIn("expected setup failure", result.errors[0][1])
+            for name, sentinel in sentinels.items():
+                self.assertIs(sys.modules.get(name), sentinel)
+        finally:
+            LifecycleCase.doClassCleanups()
+            self._restore_entries(saved)
 
 
 class RocmCapabilitiesTest(unittest.TestCase):
     @classmethod
     def setUpClass(cls) -> None:
+        module_name = "rocm_capabilities_under_test"
+        saved_modules = _snapshot_modules((module_name,))
+        cls.addClassCleanup(_restore_modules, saved_modules)
         cls.capabilities = _load_module(
-            "rocm_capabilities_under_test",
+            module_name,
             ROOT / "vllm/platforms/rocm_capabilities.py",
         )
 
@@ -56,33 +171,26 @@ class RocmSkinnyPolicyTest(unittest.TestCase):
             "vllm.model_executor": ROOT / "vllm/model_executor",
             "vllm.model_executor.layers": ROOT / "vllm/model_executor/layers",
         }
-        cls.saved_modules = {
-            name: sys.modules.get(name) for name in parent_paths
-        }
+        child_module_names = (
+            "vllm.model_executor.layers.rocm_skinny_shapes",
+            "vllm.model_executor.layers.rocm_skinny_policy",
+        )
+        module_names = (*parent_paths, *child_module_names)
+        saved_modules = _snapshot_modules(module_names)
+        cls.addClassCleanup(_restore_modules, saved_modules)
         for name, path in parent_paths.items():
             parent = ModuleType(name)
             parent.__path__ = [str(path)]
             sys.modules[name] = parent
 
-        shapes = _load_module(
-            "vllm.model_executor.layers.rocm_skinny_shapes",
+        _load_module(
+            child_module_names[0],
             ROOT / "vllm/model_executor/layers/rocm_skinny_shapes.py",
         )
         cls.policy = _load_module(
-            "vllm.model_executor.layers.rocm_skinny_policy",
+            child_module_names[1],
             ROOT / "vllm/model_executor/layers/rocm_skinny_policy.py",
         )
-        cls.loaded_module_names = [shapes.__name__, cls.policy.__name__]
-
-    @classmethod
-    def tearDownClass(cls) -> None:
-        for name in cls.loaded_module_names:
-            sys.modules.pop(name, None)
-        for name, saved in cls.saved_modules.items():
-            if saved is None:
-                sys.modules.pop(name, None)
-            else:
-                sys.modules[name] = saved
 
     def _eligible(self, **overrides: object) -> bool:
         arguments: dict[str, object] = {
@@ -148,12 +256,21 @@ class RocmSkinnyPolicyTest(unittest.TestCase):
 
 class RocmPlatformIsolationTest(unittest.TestCase):
     def test_gfx936_is_not_in_broad_architecture_predicates(self) -> None:
-        lines = (ROOT / "vllm/platforms/rocm.py").read_text().splitlines()
+        text = (ROOT / "vllm/platforms/rocm.py").read_text()
+        tree = ast.parse(text)
         for assignment in ("_ON_MI3XX", "_ON_GFX9"):
-            line = next(
-                line for line in lines if line.startswith(f"{assignment} =")
+            node = next(
+                node
+                for node in tree.body
+                if isinstance(node, ast.Assign)
+                and any(
+                    isinstance(target, ast.Name) and target.id == assignment
+                    for target in node.targets
+                )
             )
-            self.assertNotIn("gfx936", line)
+            expression = ast.get_source_segment(text, node.value)
+            self.assertIsNotNone(expression)
+            self.assertNotIn("gfx936", expression)
 
 
 if __name__ == "__main__":
