@@ -29,21 +29,14 @@ def _ensure_src_path() -> None:
 def activate() -> None:
     global _ACTIVE, _ATTENTION, _KV_QUANT, _EXEC, _CACHE_MGR
 
-    # v1.1.0: quant_force is no-op (pre_quantize.py handles AWQ at startup)
-    try:
-        from fdu_vllm.quant_force import activate_quant_force
-
-        activate_quant_force()
-    except Exception as _qf_err:
-        logger.warning("FDU quant_force patch failed: %s", _qf_err)
-
     from fdu_vllm.config import get_config
-    from fdu_vllm.phase1 import log_phase1_summary
 
     cfg = get_config()
     if not cfg.enable:
         logger.info("FDU optimizations disabled (FDU_ENABLE=0)")
         return
+
+    from fdu_vllm.phase1 import log_phase1_summary
 
     _ensure_src_path()
     _ACTIVE = True

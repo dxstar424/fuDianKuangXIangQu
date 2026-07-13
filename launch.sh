@@ -1,70 +1,84 @@
 #!/usr/bin/env bash
-# ============================================================
-# v1.1.0 — Pre-quantize bf16→AWQ INT4 at startup, native vLLM AWQ pipeline
-#
-# 策略：启动时量化模型到 /tmp/awq_model/，vLLM 原生 AWQ 加载
-#   无需 monkey-patch 权重加载！vLLM 自带 AWQ Triton kernels
-#
-#   Step 1: PYTHONPATH → fdu_vllm importable
-#   Step 2: python -m fdu_vllm.pre_quantize → bf16→AWQ INT4 量化
-#   Step 3: vLLM --model /tmp/awq_model --quantization awq
-#   Step 4: vLLM 原生加载 AWQ 格式 → Triton fused dequant+matmul
-# ============================================================
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
-export PYTHONPATH="$SCRIPT_DIR:${PYTHONPATH:-}"
-source "$SCRIPT_DIR/scripts/rocm_env.sh"
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+
+if [[ -z "${PYTHON_BIN:-}" ]]; then
+    if command -v python >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python)"
+    elif command -v python3 >/dev/null 2>&1; then
+        PYTHON_BIN="$(command -v python3)"
+    else
+        echo "[launch] ERROR: neither python nor python3 is available" >&2
+        exit 2
+    fi
+elif ! PYTHON_BIN="$(command -v -- "$PYTHON_BIN")"; then
+    echo "[launch] ERROR: selected interpreter is not available" >&2
+    exit 2
+fi
 
 _resolve_model_path() {
-    for cand in \
-        /root/Qwen3.5-27B /data/Qwen3.5-27B \
+    local candidate
+    if [[ -n "${MODEL_PATH:-}" ]]; then
+        printf '%s\n' "$MODEL_PATH"
+        return
+    fi
+    for candidate in \
+        /root/Qwen3.5-27B \
+        /data/Qwen3.5-27B \
         "${SCNET_HOME:-/public/home/xdzs2026_c415}/Qwen3.5-27B" \
-        "${HOME}/Qwen3.5-27B"; do
-        [[ -d "$cand" ]] && echo "$cand" && return
+        "${HOME}/Qwen3.5-27B"
+    do
+        if [[ -d "$candidate" ]]; then
+            printf '%s\n' "$candidate"
+            return
+        fi
     done
-    echo "${MODEL_PATH:-/data/Qwen3.5-27B}"
+    printf '%s\n' /data/Qwen3.5-27B
+}
+
+_is_true() {
+    case "${1:-}" in
+        1|[Tt][Rr][Uu][Ee]) return 0 ;;
+        *) return 1 ;;
+    esac
 }
 
 MODEL_PATH="$(_resolve_model_path)"
-AWQ_MODEL_DIR="${AWQ_MODEL_DIR:-/tmp/awq_model}"
 PORT="${PORT:-8000}"
 
-echo "[launch] === v1.1.0: Pre-quantize bf16→AWQ INT4 + native vLLM AWQ ==="
-echo "[launch]   bf16 model: ${MODEL_PATH}"
-echo "[launch]   AWQ output: ${AWQ_MODEL_DIR}"
+source "$SCRIPT_DIR/scripts/rocm_env.sh"
 
-# ── Step 1: Pre-quantize if not already done ──
-if [[ ! -f "${AWQ_MODEL_DIR}/quant_config.json" ]]; then
-    echo "[launch]   Pre-quantizing (one-time, ~60-90s)..."
-    python -m fdu_vllm.pre_quantize "${MODEL_PATH}" "${AWQ_MODEL_DIR}"
-    echo "[launch]   Pre-quantization complete."
-else
-    echo "[launch]   AWQ model already exists, skipping pre-quantization."
+EXPECTED_PREFIX="$("$PYTHON_BIN" -c 'import sys; print(sys.prefix)')"
+
+unset PYTHONPATH
+cd /tmp
+
+PREFLIGHT_ARGS=(
+    "$SCRIPT_DIR/scripts/preflight_rocm.py"
+    --expected-prefix "$EXPECTED_PREFIX"
+    --require-arch gfx936
+)
+if _is_true "$VLLM_ROCM_USE_SKINNY_GEMM" \
+    && ! _is_true "$FDU_FORCE_STOCK_GEMM"
+then
+    PREFLIGHT_ARGS+=(--require-skinny)
 fi
 
-# ── Step 2: Start vLLM with AWQ model ──
+"$PYTHON_BIN" "${PREFLIGHT_ARGS[@]}"
+
 VLLM_ARGS=(
-    --model "${AWQ_MODEL_DIR}"
-    --quantization awq
-    --port "${PORT}"
+    --model "$MODEL_PATH"
+    --port "$PORT"
     --tensor-parallel-size 1
     --max-model-len 32768
-    --max-num-seqs 256
-    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.95}"
-    --dtype float16
+    --gpu-memory-utilization "${GPU_MEMORY_UTILIZATION:-0.94}"
+    --dtype bfloat16
     --trust-remote-code
     --served-model-name Qwen3.5-27B
     --load-format auto
-    --enable-prefix-caching
     --no-enable-log-requests
-    --disable-log-stats
-    --compilation-config '{"cudagraph_mode": 3, "cudagraph_capture_sizes": [1, 2, 4, 8]}'
 )
 
-echo "[launch]   Starting vLLM with AWQ model..."
-echo "[launch]   port:  ${PORT}"
-echo "[launch] ====================================="
-
-cd /tmp
-exec python -m vllm.entrypoints.openai.api_server "${VLLM_ARGS[@]}" "$@"
+exec "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
+    "${VLLM_ARGS[@]}" "$@"
