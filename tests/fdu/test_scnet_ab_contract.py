@@ -20,10 +20,23 @@ class ScnetAbContractTest(unittest.TestCase):
         ):
             self.assertIn(value, self.text)
 
-    def test_builds_native_wheels_in_system_site_venvs(self) -> None:
-        self.assertIn('"$SYSTEM_PYTHON" -m venv --system-site-packages', self.text)
+    def test_builds_native_wheels_without_ensurepip(self) -> None:
+        self.assertIn(
+            '"$SYSTEM_PYTHON" -m venv --without-pip --system-site-packages',
+            self.text,
+        )
+        self.assertIn('import pip, torch', self.text)
+        self.assertIn('[gfx936:init] creating control venv', self.text)
+        self.assertIn('[gfx936:init] creating candidate venv', self.text)
+
+    def test_builds_native_wheels_for_gfx936(self) -> None:
         self.assertIn("PYTORCH_ROCM_ARCH=gfx936", self.text)
         self.assertIn("sha256sum", self.text)
+
+    def test_benchmark_runs_unbuffered_with_progress(self) -> None:
+        self.assertIn('"$CONTROL_VENV/bin/python" -u', self.text)
+        benchmark = (ROOT / "scripts/bench_gfx936_skinny.py").read_text()
+        self.assertIn("[gfx936:bench]", benchmark)
 
     def test_has_every_pipeline_mode(self) -> None:
         for mode in (

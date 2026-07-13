@@ -38,8 +38,14 @@ safe_clear_build_outputs() {
 init() {
     mkdir -p "$EXPERIMENT_ROOT" "$RESULTS_ROOT" "$RESULTS_ROOT/wheels/control" \
         "$RESULTS_ROOT/wheels/candidate" "$RESULTS_ROOT/logs" "$RESULTS_ROOT/probes"
-    "$SYSTEM_PYTHON" -m venv --system-site-packages "$CONTROL_VENV"
-    "$SYSTEM_PYTHON" -m venv --system-site-packages "$CANDIDATE_VENV"
+    echo "[gfx936:init] creating control venv: $CONTROL_VENV"
+    "$SYSTEM_PYTHON" -m venv --without-pip --system-site-packages "$CONTROL_VENV"
+    "$CONTROL_VENV/bin/python" -c \
+        'import pip, torch; print("[gfx936:init] control", torch.__version__, torch.version.hip)'
+    echo "[gfx936:init] creating candidate venv: $CANDIDATE_VENV"
+    "$SYSTEM_PYTHON" -m venv --without-pip --system-site-packages "$CANDIDATE_VENV"
+    "$CANDIDATE_VENV/bin/python" -c \
+        'import pip, torch; print("[gfx936:init] candidate", torch.__version__, torch.version.hip)'
     if [[ "$REPO_ROOT" != "$SOURCE_ROOT" ]]; then
         mkdir -p "$SOURCE_ROOT"
         rsync -a --delete \
@@ -80,7 +86,7 @@ bench() {
         --expected-prefix "$CONTROL_VENV" --require-arch gfx936 --require-skinny
     (
         cd /tmp
-        "$CONTROL_VENV/bin/python" "$SOURCE_ROOT/scripts/bench_gfx936_skinny.py" \
+        "$CONTROL_VENV/bin/python" -u "$SOURCE_ROOT/scripts/bench_gfx936_skinny.py" \
             --model-config "$MODEL_ROOT/config.json" \
             --output "$RESULTS_ROOT/microbench.json" \
             --write-whitelist "$SOURCE_ROOT/vllm/model_executor/layers/rocm_skinny_shapes.py"

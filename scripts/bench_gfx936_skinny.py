@@ -309,6 +309,10 @@ def run_gpu_benchmark(
         for shape_index, shape in enumerate(shapes):
             family = str(shape["family"])
             m, k = int(shape["m"]), int(shape["k"])
+            print(
+                f"[gfx936:bench] start n={n} family={family} m={m} k={k}",
+                flush=True,
+            )
             row: dict[str, Any] = {
                 **shape,
                 "n": n,
@@ -386,6 +390,12 @@ def run_gpu_benchmark(
             except Exception as error:  # keep every failed shape in the artifact
                 row["error"] = f"{type(error).__name__}: {error}"
             rows.append(row)
+            print(
+                f"[gfx936:bench] done n={n} family={family} "
+                f"admitted={row['admitted']} speedup={row.get('speedup')} "
+                f"error={row.get('error')}",
+                flush=True,
+            )
     return arch, rows
 
 

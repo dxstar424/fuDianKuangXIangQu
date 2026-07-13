@@ -80,13 +80,13 @@ VALIDATED_GFX936_SHAPES: frozenset[SkinnyShape] = frozenset()
 
 ### 当前已知阻塞
 
-SCNet 系统 Python 最初缺少 `ensurepip/python3.10-venv`，导致：
+SCNet 系统 Python 最初缺少 `ensurepip/python3.10-venv`，旧版 `init` 因此导致：
 
 1. `vllm_baseline` 虚拟环境创建失败；
 2. 后续 `setup.py` 使用残缺 venv，报 `ModuleNotFoundError: torch`；
 3. preflight 继而报 `vllm._C` / `_rocm_C` / architecture 全部缺失。
 
-这些是同一个 venv 初始化失败引起的连锁错误，**不是 kernel benchmark 失败**。
+这些是同一个 venv 初始化失败引起的连锁错误，**不是 kernel benchmark 失败**。修复后的 `init` 使用 `--without-pip --system-site-packages`，不再依赖 ensurepip，并会立即验证继承的 `pip` 和 `torch`。
 
 ## 5. 从当前状态继续：可复制命令
 
@@ -120,22 +120,9 @@ git rev-parse --short HEAD
 
 实现锚点应至少为 `91ea5e9`；交接文档合入后可能是更新的提交。
 
-### 5.2 修复 venv 支持
+### 5.2 清理旧版创建失败的 venv
 
-当前容器为 root：
-
-```bash
-apt-get update
-apt-get install -y python3.10-venv
-```
-
-如果包名不存在，再使用：
-
-```bash
-apt-get install -y python3-venv
-```
-
-清理的只是刚才创建失败的两个 venv：
+先拉取包含 `--without-pip` 修复的最新 `dx_branch`。不需要安装 `python3.10-venv`。清理的只是之前创建失败的两个 venv：
 
 ```bash
 rm -rf \
@@ -422,7 +409,6 @@ bash scripts/scnet_start_optimized.sh
 不要直接启动 27B 模型。先执行：
 
 ```bash
-apt-get install -y python3.10-venv
 rm -rf /public/home/xdzs2026_c415/venvs/vllm_baseline \
        /public/home/xdzs2026_c415/venvs/vllm_gfx936
 cd /public/home/xdzs2026_c415/experiments/gfx936_skinny/source
