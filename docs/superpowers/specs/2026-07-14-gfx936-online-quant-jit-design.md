@@ -1,7 +1,7 @@
 # gfx936 Online Weight-Only Quantization JIT Design
 
 **Date:** 2026-07-14
-**Status:** Approved direction; written specification awaiting final user review
+**Status:** Approved by the user; SCNet gate shortened by user direction
 **Target:** Qwen3.5-27B, vLLM 0.18.1, one native `gfx936` DCU
 
 ## 1. Objective
@@ -63,8 +63,9 @@ traffic reduction to make 90 physically plausible.
 - A custom N=1 HIP GEMV path and a correctness-preserving BF16 prefill path.
 - Per-shape numerical and performance gates, structured logging, and explicit
   fallback behavior.
-- SCNet microbenchmark, throughput, SLA, and four-task accuracy gates before a
-  platform submission is selected.
+- SCNet microbenchmark, short throughput/SLA probes, and two representative
+  accuracy probes before a platform submission is selected; the platform run
+  supplies the exhaustive final validation.
 
 ### Out of scope for this iteration
 
@@ -318,17 +319,20 @@ admission checks, not substitutes for the full task-level accuracy gate.
 
 ### 8.4 End-to-end gate
 
-Candidates proceed in this order:
+Candidates proceed in this speed-first order:
 
 1. model load and a deterministic server probe;
 2. server readiness within the existing platform startup watchdog;
-3. 8K–16K throughput, TTFT P99, and TPOT P99;
-4. all three throughput tiers;
-5. HotpotQA, GovReport, Retrieval MultiPoint, and Aggregation accuracy;
-6. score projection using the same baseline set for both candidates.
+3. three 8K–16K cases with TTFT P99 and TPOT P99, compared with the recorded
+   dx_branch result rather than spending another server load on `off`;
+4. three cases in each throughput tier for the selected candidate;
+5. three HotpotQA and three Retrieval MultiPoint accuracy cases;
+6. a directional score projection, explicitly labeled as a fast SCNet gate.
 
-Any failed request, non-finite value, accuracy delta above 1%, tier throughput
-regression, or SLA ratio above 1.5 rejects that profile.
+Any failed request, non-finite value, sampled accuracy delta above 1%, tier
+throughput regression, or SLA ratio above 1.45 rejects that profile. These
+short samples deliberately trade confidence for turnaround time; the platform
+evaluation remains the final statistical and four-task accuracy test.
 
 ## 9. Error handling and rollback
 
@@ -366,15 +370,15 @@ when Torch/HIP is unavailable rather than silently passing.
 
 ### SCNet tests
 
-SCNet supplies the decisive evidence:
+SCNet supplies rapid directional evidence:
 
 - actual compile wall time and `.so` load;
 - synthetic and six-shape kernel JSON output;
 - W8 versus `LLMM1`/stock latency and numerical error;
 - hybrid W4 versus W8 latency and numerical error;
 - model-load peak/resident memory;
-- three throughput tiers with TTFT/TPOT;
-- all four accuracy tasks.
+- three-case throughput probes with TTFT/TPOT;
+- three-case HotpotQA and Retrieval MultiPoint accuracy probes.
 
 Every result record includes commit hash, mode, compiler version, source hash,
 and whether each shape selected W4, W8, or BF16.
@@ -389,11 +393,11 @@ Three immutable candidates are retained:
 
 Selection rules:
 
-- Submit `hybrid_w4` only if all four accuracy deltas are at most 1%, every SLA
-  ratio is below 1.5, no tier regresses from `w8`, and its projected score is
-  higher than `w8`.
-- Otherwise submit `w8` if it passes the same accuracy/SLA limits and improves
-  the weighted platform projection over `off`.
+- Submit `hybrid_w4` only if both sampled accuracy deltas are at most 1%, every
+  sampled SLA ratio is below 1.45, no sampled tier regresses from `w8`, and its
+  directional projection is higher than `w8`.
+- Otherwise submit `w8` if it passes the same fast accuracy/SLA limits and
+  improves the weighted projection over the recorded `off` result.
 - Otherwise retain `off`; a failed experiment must not replace the known
   66.8175 path.
 
