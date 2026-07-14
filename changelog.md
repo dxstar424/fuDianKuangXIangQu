@@ -4,7 +4,7 @@
 
 ### 在线 W8/W4 JIT 候选与快速 SCNet 门禁
 
-- 保留平台已测 66.8175 分的原生 gfx936 BF16/LLMM1 路径，并把 `FDU_GFX936_QUANT_MODE=off` 设为安全默认值。
+- 保留 `dx_branch` 已记录 66.8175 分所对应的原生 gfx936 BF16 保底实现，并把 `FDU_GFX936_QUANT_MODE=off` 设为安全默认值；该次评测未保存 commit hash，若对应 `88b7d10` 或其后继则包含 5-shape LLMM1，但暂不归因其独立贡献。
 - 新增 Torch-header-free HIP JIT builder：只编译原生 `gfx936`，45 秒超时，按源码/编译器/flags 哈希，并原子写入临时 `/tmp` `.so`。
 - 新增 W8A16 N=1 decode GEMV，以及两个 MLP shape 的 group-32 W4A16 候选；prefill 临时重构 BF16，未接纳 shape 保持 LLMM1/stock BF16。
 - 新增六 shape 数值、速度、显存 benchmark。W8 要求 NRMSE `<=0.015`、cosine `>=0.999`，W4 要求 NRMSE `<=0.08`、cosine `>=0.995`，两者均要求至少 `1.10x` shape-level speedup。

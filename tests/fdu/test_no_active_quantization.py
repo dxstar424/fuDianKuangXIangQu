@@ -66,6 +66,14 @@ class NoActiveQuantizationTest(unittest.TestCase):
         self.assertIn("v1.3.0-gfx936-online-quant", changelog)
         self.assertIn("历史实验（非当前启动路径）", changelog)
 
+    def test_docs_do_not_overattribute_unpinned_platform_result(self) -> None:
+        readme = (ROOT / "README.md").read_text()
+        handoff = (ROOT / "docs/GFX936_HANDOFF.md").read_text()
+        report = (ROOT / "report.md").read_text()
+        for document in (readme, handoff, report):
+            self.assertIn("评测提交 hash 尚未随结果记录", document)
+        self.assertIn("不能将增益独立归因于 LLMM1", report)
+
 
 if __name__ == "__main__":
     unittest.main()

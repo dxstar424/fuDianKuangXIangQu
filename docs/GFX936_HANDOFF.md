@@ -5,13 +5,13 @@
 
 ## 一页结论
 
-- `dx_branch` 的已测保底路径是原生 gfx936 + BF16 + 5 个 N=1 LLMM1 shape；平台得分 66.8175，SLA 与精度扣分均为 0。
+- `dx_branch` 已记录平台得分 66.8175，SLA 与精度扣分均为 0；评测提交 hash 尚未随结果记录。若对应 `88b7d10` 或其后继，则包含原生 gfx936 + BF16 + 5 个 N=1 LLMM1 shape，但不能量化 LLMM1 的独立贡献。
 - 在线 W8 与 selective W4 的实现已合入主工作区，代码锚点为 `1dc9f46`；交付提交请以 `git rev-parse HEAD` 为准。
 - `FDU_GFX936_QUANT_MODE` 默认仍是 `off`。W8/W4 尚无 SCNet 端到端数据，不能声称已提速。
 - 最快验证顺序是：复用 wheel → 45 秒 JIT 门禁 → 六 shape W8 → 一次 8–16K 三样本 → 有收益才试 hybrid → 胜者短验。
 - 完整可复制命令只认 [SCNET_RUN.md](SCNET_RUN.md)。
 
-## 已测保底结果
+## 已记录的保底参照
 
 | 指标 | 平台实测 |
 |---|---:|
@@ -21,6 +21,8 @@
 | SLA 扣分 | 0 |
 | 精度扣分 | 0 |
 | 最终得分 | 66.8175 |
+
+该结果可用于本轮快速候选的方向比较。由于缺少平台评测 commit 与同环境 stock/LLMM1 A/B，不能把 66.8175 或相对旧结果的差值独立归因于 LLMM1。
 
 `vllm/model_executor/layers/rocm_skinny_shapes.py` 中有五个 SCNet 已验证 BF16 shape。`(N=1, M=5120, K=17408)` 的旧 LLMM1 数值测试失败，因此保底模式对它使用 stock BF16 linear。
 
