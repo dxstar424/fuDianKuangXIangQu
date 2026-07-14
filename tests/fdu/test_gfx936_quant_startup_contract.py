@@ -13,6 +13,7 @@ PREFLIGHT = ROOT / "scripts/preflight_gfx936_quant.py"
 LAUNCH = ROOT / "launch.sh"
 ROCM_ENV = ROOT / "scripts/rocm_env.sh"
 DOCKERFILE = ROOT / "Dockerfile"
+CMAKE = ROOT / "CMakeLists.txt"
 
 REQUIRED_SYMBOLS = (
     "fdu_gfx936_w8a16_gemv",
@@ -82,20 +83,48 @@ class Gfx936QuantStartupContractTest(unittest.TestCase):
                     ):
                         preflight.validate_symbols(library)
 
-    def test_launch_builds_and_smoke_checks_quant_before_changing_directory(self) -> None:
+    def test_bundled_extension_loads_torch_dependencies_before_cdll(self) -> None:
+        preflight = _load_preflight()
+        events: list[str] = []
+        with tempfile.TemporaryDirectory() as directory:
+            library = Path(directory) / "_rocm_C.abi3.so"
+            library.write_bytes(b"not-empty")
+            fake = _FakeLibrary(missing="")
+            with (
+                mock.patch.object(
+                    preflight.importlib,
+                    "import_module",
+                    side_effect=lambda name: events.append(name),
+                ),
+                mock.patch.object(
+                    preflight.ctypes,
+                    "CDLL",
+                    side_effect=lambda path: events.append("cdll") or fake,
+                ),
+            ):
+                preflight.validate_symbols(library)
+        self.assertEqual(events, ["torch", "cdll"])
+
+    def test_rocm_wheel_embeds_quant_kernel(self) -> None:
+        text = _read(CMAKE)
+        rocm_sources = text.split("set(VLLM_ROCM_EXT_SRC", 1)[1].split(")", 1)[0]
+        self.assertIn('"csrc/fdu/gfx936_quant_gemv.hip"', rocm_sources)
+
+    def test_launch_smoke_checks_bundled_quant_before_changing_directory(self) -> None:
         text = _read(LAUNCH)
-        self.assertIn("build_gfx936_quant_jit.py", text)
-        self.assertIn("--timeout 45", text)
+        self.assertNotIn("build_gfx936_quant_jit.py", text)
         self.assertIn("preflight_gfx936_quant.py", text)
-        self.assertIn("FDU_GFX936_QUANT_MODE=off", text)
+        self.assertNotIn("gfx936 quant JIT/preflight failed", text)
 
         native_preflight = text.index('"$PYTHON_BIN" "${PREFLIGHT_ARGS[@]}"')
-        builder = text.index("build_gfx936_quant_jit.py")
         quant_preflight = text.index("preflight_gfx936_quant.py")
         change_directory = text.index("cd /tmp")
-        self.assertLess(native_preflight, builder)
-        self.assertLess(builder, quant_preflight)
+        self.assertLess(native_preflight, quant_preflight)
         self.assertLess(quant_preflight, change_directory)
+
+    def test_preflight_can_resolve_bundled_rocm_extension(self) -> None:
+        preflight = _load_preflight()
+        self.assertTrue(callable(preflight.find_bundled_library))
 
     def test_quant_mode_defaults_w8_in_environment_and_image(self) -> None:
         self.assertIn(

@@ -11,35 +11,36 @@
   -> 原生 gfx936 wheel
   -> vLLM 原生 prefix caching + 关闭请求/统计日志
   -> FDU_GFX936_QUANT_MODE=w8
-       -> 5 个 SCNet microbenchmark 已接纳 shape 使用 W8A16 JIT GEMV
+       -> W8A16 HIP 内核随 wheel 编入 vllm._rocm_C
+       -> 5 个 SCNet microbenchmark 已接纳 shape 使用 W8A16 GEMV
        -> (5120, 17408) 自动拒绝并保留 stock BF16 linear
-  -> JIT/ABI/smoke/admission 任一失败时回退 BF16/LLMM1
+  -> 启动 ABI/smoke 或模型加载零量化层时直接失败，不再静默伪装 W8
 ```
 
 `dx_branch` 最近一次记录的平台结果为：
 
 | 指标 | 实测值 |
 |---|---:|
-| 4–8K 吞吐 | 15.03 tok/s |
-| 8–16K 吞吐 | 12.00 tok/s |
-| 16–32K 吞吐 | 6.09 tok/s |
+| 4–8K 吞吐 | 15.00 tok/s |
+| 8–16K 吞吐 | 11.97 tok/s |
+| 16–32K 吞吐 | 6.11 tok/s |
 | SLA 扣分 | 0 |
 | 精度扣分 | 0 |
-| 最终得分 | 66.8175 |
+| 最终得分 | **66.7878** |
 
-评测提交 hash 尚未随结果记录。如果该次评测对应 `88b7d10` 或其后继，则结果包含 5-shape LLMM1；当前将它作为保底参照，但不能把增益独立归因于 LLMM1，后续仍需同环境 stock/LLMM1 A/B。
+上一记录为 `66.8175`、`15.03 / 12.00 / 6.09 tok/s`。两轮差异仅约 `-0.20% / -0.25% / +0.33%`，属于测量噪声，不能把新增 W8、prefix cache 或 KV 元数据优化归因为提分。评测提交 hash 尚未随结果记录，平台也未提供启动日志；若旧结果对应 `88b7d10` 或其后继，则包含 5-shape LLMM1，但仍不能将增益独立归因于 LLMM1。
 
-当前新增候选是在评测机启动时 JIT 编译的小型 HIP 库，并对六类精确 shape 做在线、进程内权重量化：
+下一候选把相同 HIP 内核直接编入 wheel 的 `vllm._rocm_C`，并对六类精确 shape 做在线、进程内权重量化：
 
 | `FDU_GFX936_QUANT_MODE` | 行为 |
 |---|---|
-| `off` | 当前 BF16/LLMM1 保底实现，66.8175 回滚路径 |
+| `off` | 当前 BF16/LLMM1 保底实现，约 66.8 分回滚路径 |
 | `w8`（默认） | 通过门禁的 shape 使用 W8A16 N=1 GEMV |
 | `hybrid_w4` | 两个 MLP shape 优先 group-32 W4，其余使用 W8；逐 shape 失败回退 |
 
-量化候选只在运行进程的显存中生成 packed weight 和 scale，不修改 checkpoint，也不把量化权重写入模型目录或持久目录。N=1 decode 使用自定义 HIP GEMV；prefill 临时还原 BF16 后走现有 linear。编译、ABI、数值或速度门禁失败时保持 BF16 路径。
+量化候选只在运行进程的显存中生成 packed weight 和 scale，不修改 checkpoint，也不把量化权重写入模型目录或持久目录。N=1 decode 使用自定义 HIP GEMV；prefill 临时还原 BF16 后走现有 linear。未知模式仍回退 `off`；但请求 `w8`/`hybrid_w4` 时，wheel ABI、GPU smoke 或“至少一个 layer 激活”任一不满足都会停止启动，避免再次得到无法解释的 BF16 分数。
 
-W8 六 shape microbenchmark 已得到 5 个接纳、1 个拒绝；接纳项相对当前 BF16/LLMM1 为 `1.19x–1.53x`，`(5120,17408)` 仅 `0.505x`，因此明确保持 BF16。按本轮“停止 SCNet、直接平台盲测”的决策，默认改为选择性 `w8`；尚无端到端吞吐、SLA 或精度结论，不能把 microbenchmark 写成平台提分。
+W8 六 shape microbenchmark 已得到 5 个接纳、1 个拒绝；接纳项相对当前 BF16/LLMM1 为 `1.19x–1.53x`，`(5120,17408)` 仅 `0.505x`，因此明确保持 BF16。66.7878 平台结果未证明原运行时 JIT 路径实际激活；wheel 内置版本仍是盲测候选，不能把 microbenchmark 写成平台提分。
 
 Decode 执行路径另加 KV block table 脏提交：只有新增、移动或交换 KV block 时才把 CPU block table 复制到 GPU。默认 block size 为 16，稳定单请求 decode 通常可跳过约 15/16 次重复 H2D；不改变 KV 内容、块大小、Attention 数值或分配策略。该项只有静态/状态机测试，平台收益仍待跑分。
 
@@ -92,7 +93,7 @@ bash -n launch.sh scripts/rocm_env.sh scripts/scnet_ab_gfx936.sh
 - 不使用投机解码、剪枝、层跳过、预缓存答案或评测期下载。
 - 不修改平台锁定的 batch/scheduler、采样和 token 参数。
 - 不设置 `HSA_OVERRIDE_GFX_VERSION`，只编译和运行原生 `gfx936`。
-- JIT 产物只在 `/tmp/fdu_gfx936_quant/`，按源文件、编译器和参数哈希，进程/容器结束后可丢弃。
+- 正式服务使用 wheel 内置 `_rocm_C`；`/tmp/fdu_gfx936_quant/` JIT 仅保留给独立 kernel 微基准，不进入提交启动链。
 - `FDU_FORCE_STOCK_GEMM=1` 可立即禁用 BF16 LLMM1；`FDU_GFX936_QUANT_MODE=off` 可立即禁用在线量化；`ENABLE_PREFIX_CACHING=0` 可独立禁用 prefix cache。
 
 ## 已放弃的活跃方向

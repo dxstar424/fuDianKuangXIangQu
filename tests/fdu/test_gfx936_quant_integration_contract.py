@@ -6,6 +6,7 @@ import inspect
 import math
 import unittest
 from pathlib import Path
+from unittest import mock
 
 
 ROOT = Path(__file__).resolve().parents[2]
@@ -195,17 +196,29 @@ class Gfx936QuantIntegrationContractTest(unittest.TestCase):
         process = _top_level_function(
             self.loader_tree, "process_weights_after_loading"
         )
+        required_calls = _calls(process, "require_online_quantization")
         online_calls = _calls(process, "online_quantization_active")
         empty_cache_calls = _calls(process, "torch.cuda.empty_cache")
+        self.assertEqual(len(required_calls), 1)
         self.assertEqual(len(online_calls), 1)
         self.assertEqual(len(empty_cache_calls), 1)
 
         top_level_loops = [node for node in process.body if isinstance(node, ast.For)]
         self.assertGreaterEqual(len(top_level_loops), 2)
         first_loop, attention_loop = top_level_loops[:2]
-        self.assertLess(first_loop.end_lineno, online_calls[0].lineno)
+        self.assertLess(first_loop.end_lineno, required_calls[0].lineno)
+        self.assertLess(required_calls[0].lineno, online_calls[0].lineno)
         self.assertLess(online_calls[0].lineno, empty_cache_calls[0].lineno)
         self.assertLess(empty_cache_calls[0].lineno, attention_loop.lineno)
+
+    def test_requested_gfx936_quant_rejects_zero_active_layers(self) -> None:
+        self.quant._ACTIVE_LAYER_COUNT = 0
+        with (
+            mock.patch.object(self.quant, "parse_quant_mode", return_value="w8"),
+            mock.patch.object(self.quant, "is_gfx936_runtime", return_value=True),
+        ):
+            with self.assertRaisesRegex(RuntimeError, "zero layers"):
+                self.quant.require_online_quantization()
 
     def test_w8_admission_accepts_boundary_and_rejects_worse_metrics(self) -> None:
         self.assertTrue(

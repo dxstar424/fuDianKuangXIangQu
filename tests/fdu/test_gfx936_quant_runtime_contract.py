@@ -86,6 +86,34 @@ class Gfx936QuantRuntimeContractTest(unittest.TestCase):
             self.assertEqual(len(fake.fdu_gfx936_w8a16_gemv.argtypes), 7)
             self.assertEqual(len(fake.fdu_gfx936_w8_dequant.argtypes), 6)
 
+    def test_loader_discovers_bundled_rocm_extension_without_env(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            package = Path(directory) / "vllm"
+            package.mkdir()
+            extension = package / "_rocm_C.abi3.so"
+            extension.write_bytes(b"fixture")
+            spec = mock.Mock(submodule_search_locations=[str(package)])
+            with (
+                mock.patch.dict(os.environ, {}, clear=True),
+                mock.patch.object(
+                    self.quant.importlib.util, "find_spec", return_value=spec
+                ),
+            ):
+                self.assertEqual(
+                    self.quant.resolve_kernel_library_path(), extension.resolve()
+                )
+
+    def test_explicit_library_path_overrides_bundled_extension(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            explicit = Path(directory) / "explicit.so"
+            explicit.write_bytes(b"fixture")
+            with mock.patch.dict(
+                os.environ, {"FDU_GFX936_QUANT_SO": str(explicit)}, clear=True
+            ):
+                self.assertEqual(
+                    self.quant.resolve_kernel_library_path(), explicit.resolve()
+                )
+
     def test_missing_abi_symbol_is_reported_as_runtime_error(self) -> None:
         with tempfile.TemporaryDirectory() as directory:
             library_path = Path(directory) / "kernel.so"

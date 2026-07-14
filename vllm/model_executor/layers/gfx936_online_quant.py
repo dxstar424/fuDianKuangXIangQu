@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import ctypes
+import importlib.util
 import logging
 import os
 from collections.abc import Iterator, Sequence
@@ -72,7 +73,9 @@ TIMED_REPETITIONS = 30
 
 
 def parse_quant_mode(value: str | None = None) -> QuantMode:
-    normalized = (value if value is not None else os.getenv("FDU_GFX936_QUANT_MODE", "off"))
+    normalized = value if value is not None else os.getenv(
+        "FDU_GFX936_QUANT_MODE", "w8"
+    )
     normalized = normalized.strip().lower()
     if normalized in {"off", "w8", "hybrid_w4"}:
         return normalized  # type: ignore[return-value]
@@ -153,6 +156,21 @@ def online_quantization_active() -> bool:
     return _ACTIVE_LAYER_COUNT > 0
 
 
+def require_online_quantization() -> None:
+    mode = parse_quant_mode()
+    if mode == "off" or not is_gfx936_runtime():
+        return
+    if not online_quantization_active():
+        raise RuntimeError(
+            f"gfx936 quant mode {mode!r} requested but zero layers were activated"
+        )
+    logger.info(
+        "gfx936 quant activation complete mode=%s layers=%d",
+        mode,
+        _ACTIVE_LAYER_COUNT,
+    )
+
+
 def iter_row_chunks(
     rows: int, columns: int, byte_limit: int = PACK_CHUNK_BYTES
 ) -> Iterator[tuple[int, int]]:
@@ -163,13 +181,37 @@ def iter_row_chunks(
         yield start, min(rows, start + rows_per_chunk)
 
 
+def resolve_kernel_library_path(path: str | Path | None = None) -> Path:
+    explicit = path if path is not None else os.getenv("FDU_GFX936_QUANT_SO")
+    if explicit:
+        selected = Path(explicit).expanduser()
+        try:
+            resolved = selected.resolve(strict=True)
+        except OSError as error:
+            raise FileNotFoundError(
+                f"gfx936 quant library not found: {selected}"
+            ) from error
+        if not resolved.is_file():
+            raise FileNotFoundError(f"gfx936 quant library not found: {resolved}")
+        return resolved
+
+    spec = importlib.util.find_spec("vllm")
+    locations = () if spec is None else (spec.submodule_search_locations or ())
+    for location in locations:
+        package = Path(location)
+        for candidate in sorted(package.glob("_rocm_C*.so")):
+            if candidate.is_file():
+                return candidate.resolve()
+    raise FileNotFoundError(
+        "bundled gfx936 quant library was not found in vllm._rocm_C"
+    )
+
+
 def load_kernel_library(path: str | Path | None = None) -> LoadedKernels:
     global _LOADED_KERNELS
     if _LOADED_KERNELS is not None and path is None:
         return _LOADED_KERNELS
-    selected = Path(path or os.getenv("FDU_GFX936_QUANT_SO", ""))
-    if not str(selected) or not selected.is_file():
-        raise FileNotFoundError(f"gfx936 quant library not found: {selected}")
+    selected = resolve_kernel_library_path(path)
     library = ctypes.CDLL(str(selected))
     pointer = ctypes.c_void_p
     integer = ctypes.c_int
@@ -526,9 +568,9 @@ def maybe_quantize_gfx936_layer(layer: object) -> object:
         return layer
 
     try:
-        load_kernel_library()
         if not is_gfx936_runtime():
             return layer
+        load_kernel_library()
 
         import torch
 

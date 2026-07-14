@@ -1,5 +1,16 @@
 # 变更日志
 
+## [v1.3.2-gfx936-bundled-w8] - 2026-07-15
+
+### 消除 W8 静默未激活路径
+
+- 记录最新平台结果：**66.7878 分**，4–8K / 8–16K / 16–32K 为 `15.00 / 11.97 / 6.11 tok/s`，SLA 与精度扣分均为 0。
+- 与上一轮 66.8175、`15.03 / 12.00 / 6.09 tok/s` 相比只变化 `-0.20% / -0.25% / +0.33%`，判定为测量噪声；平台没有日志和 checkout commit，不能证明原运行时 JIT W8 是否激活。
+- 将 `csrc/fdu/gfx936_quant_gemv.hip` 加入 `_rocm_C` ROCm 扩展源列表，使同一 W8/W4 ABI 随 wheel 编译安装；正式 `launch.sh` 不再运行 hipcc。
+- Python 在没有环境变量时源码默认 `w8`，优先使用显式 `FDU_GFX936_QUANT_SO`，否则自动定位已安装的 `vllm._rocm_C`；非 gfx936 仍不进入量化路径。
+- 启动前对 wheel 内四个 ABI 符号和真实 GPU 输出做 smoke；请求 W8/hybrid 但模型加载后零量化 layer 时直接报错，避免再次把 BF16 回退误当成候选。
+- 保留逐 shape 数值/速度 admission、`(5120,17408)` BF16 回退以及独立 JIT benchmark 工具；不同时改 Attention、KV 格式、scheduler 或精度语义。
+
 ## [v1.3.1-gfx936-selective-w8-platform] - 2026-07-14
 
 ### 选择性 W8 平台盲测

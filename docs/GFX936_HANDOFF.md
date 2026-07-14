@@ -1,20 +1,21 @@
 # dx_branch gfx936 平台交接
 
-> 更新：2026-07-14
+> 更新：2026-07-15
 >
 > 分支：`dx_branch`
 >
-> 本轮分支审计前代码锚点：`8b31f18a793dda9b6b9067a305975207b767c52e`
+> wheel 内置 W8 修改前代码锚点：`6dbc3d7e9edf7ba2d28ca7b7b08622881e63c1df`
 >
 > 最终交付提交以 `git rev-parse HEAD` 以及远端 `dx_branch` / GitHub `main` 为准。
 
 ## 一页结论
 
-- 已记录的安全参照仍是 **66.8175 分**：4–8K / 8–16K / 16–32K 分别为 `15.03 / 12.00 / 6.09 tok/s`，SLA 与精度扣分均为 0。评测提交 hash 尚未随结果记录，不能把全部增益独立归因于 LLMM1。
-- 当前平台候选默认使用 `FDU_GFX936_QUANT_MODE=w8`：五个已通过 gfx936 microbenchmark 的精确 shape 使用 W8A16 JIT GEMV，`(5120,17408)` 因只有 `0.505x` 自动保留 stock BF16。
+- 最新平台结果为 **66.7878 分**：4–8K / 8–16K / 16–32K 分别为 `15.00 / 11.97 / 6.11 tok/s`，SLA 与精度扣分均为 0。相对上一轮 66.8175 的三档变化仅 `-0.20% / -0.25% / +0.33%`，判定为噪声而非提分。
+- 平台未提供日志，也没有在结果中暴露 checkout commit，因此无法证明原运行时 JIT W8 是否真正激活；评测提交 hash 尚未随结果记录，不能把全部增益独立归因于 LLMM1、W8、prefix cache 或 KV 元数据复制。
+- 当前平台候选仍默认 `FDU_GFX936_QUANT_MODE=w8`，但将 W8A16 HIP 内核随 wheel 编入 `vllm._rocm_C`，运行时不再依赖 `launch.sh` 调 hipcc。五个已测快 shape 保留 W8，`(5120,17408)` 保持 stock BF16。
 - Decode 侧保留 BF16 LLMM1/stock 回退，并增加 KV block table 脏提交；本轮再借鉴 `lutinayi_branch` 的两个低风险点：vLLM 原生 prefix caching（默认开启，可用 `ENABLE_PREFIX_CACHING=0` 关闭）和 `--disable-log-stats`。
 - **不合入**两个分支的自定义 Attention、KV FP8、分层 allocator、defrag、HIP Graph、scheduler 参数和长 warmup。它们要么未接入真实执行链，要么已有负优化/无收益证据，要么会扩大本次平台盲测风险。
-- 不再追加 SCNet 测试。基于已有 shape microbenchmark 的主观平台预估为 **70–74 分，中位约 71 分**；这不是实测保证，W8 的端到端 TTFT、TPOT、长档吞吐和四项精度仍由平台决定。
+- 不再追加 SCNet 测试。wheel 内置只消除“未激活”的不确定性，不代表 kernel 本身必然带来整模型收益；下一轮合理区间仍约 **66–74 分**，不是 90 分保证。
 
 ## 当前提交实际生效的路径
 
@@ -24,26 +25,29 @@
   -> native vLLM prefix caching（默认开，可回滚）
   -> quiet request/stat logging
   -> FDU_GFX936_QUANT_MODE=w8
-       -> 5 个接纳 shape: W8A16 N=1 JIT GEMV
+       -> csrc/fdu/gfx936_quant_gemv.hip 随 wheel 编入 vllm._rocm_C
+       -> 5 个接纳 shape: W8A16 N=1 GEMV
        -> (5120,17408): stock BF16
-       -> JIT / ABI / smoke / admission 失败: BF16 LLMM1 或 stock
+       -> ABI / GPU smoke 失败: 启动失败
+       -> 模型加载后零 W8 layer: 启动失败
+       -> 单 shape admission 拒绝: BF16 LLMM1 或 stock
   -> KV block table 仅 dirty 时 H2D
 ```
 
 没有设置平台锁定的 `--max-num-seqs`、`--max-num-batched-tokens` 或自定义 scheduler 参数。默认 block size 仍由 vLLM 保持为 16，不修改 Attention 数值或 KV 物理布局。
 
-## 已记录的保底参照
+## 已记录的平台结果
 
 | 指标 | 平台实测 |
 |---|---:|
-| 4–8K 吞吐 | 15.03 tok/s |
-| 8–16K 吞吐 | 12.00 tok/s |
-| 16–32K 吞吐 | 6.09 tok/s |
+| 4–8K 吞吐 | 15.00 tok/s |
+| 8–16K 吞吐 | 11.97 tok/s |
+| 16–32K 吞吐 | 6.11 tok/s |
 | SLA 扣分 | 0 |
 | 精度扣分 | 0 |
-| 最终得分 | **66.8175** |
+| 最终得分 | **66.7878** |
 
-如果该结果对应 `88b7d10` 或其后继，则包含原生 gfx936 + BF16 + 五个 N=1 LLMM1 shape；由于缺少精确提交和同环境 stock A/B，只把它当回滚参照。
+上一记录为 `66.8175`、`15.03 / 12.00 / 6.09 tok/s`。两个结果统计等价，可共同作为约 66.8 分的 BF16/LLMM1 类回滚参照。由于平台没有日志和精确提交证据，不能判断 66.7878 是否真正运行了 W8。
 
 ## lutinayi_branch 与 wyb 审计
 
@@ -92,7 +96,7 @@ KV FP8 继续关闭。`lutinayi_branch` 已记录 8–16K 吞吐降至 `7.81 tok
 | `(34816,5120)` | W8 | 1.192x | 通过 |
 | `(5120,17408)` | BF16 | 0.505x | W8 拒绝 |
 
-接纳项 NRMSE 约 `0.00447–0.00458`、cosine 约 `0.99999`。JIT 冷编译约 7 秒，ABI、GPU smoke 和 cache path 已通过。这些数据只证明单 kernel，不证明平台端到端得分。
+接纳项 NRMSE 约 `0.00447–0.00458`、cosine 约 `0.99999`。独立 JIT 微基准冷编译约 7 秒，ABI 与 GPU smoke 已通过；正式候选复用同一 HIP 源码，但将其编入 `_rocm_C`。这些数据只证明单 kernel，不证明平台端到端得分。
 
 ## 回滚矩阵
 
@@ -100,10 +104,10 @@ KV FP8 继续关闭。`lutinayi_branch` 已记录 8–16K 吞吐降至 `7.81 tok
 |---|---|
 | 当前平台候选 | `FDU_GFX936_QUANT_MODE=w8 ENABLE_PREFIX_CACHING=1` |
 | 只关闭 prefix cache | `ENABLE_PREFIX_CACHING=0` |
-| 回到 66.8175 类 BF16/LLMM1 路径 | `FDU_GFX936_QUANT_MODE=off` |
+| 回到约 66.8 分的 BF16/LLMM1 路径 | `FDU_GFX936_QUANT_MODE=off` |
 | 完全 stock BF16 linear | `FDU_GFX936_QUANT_MODE=off FDU_FORCE_STOCK_GEMM=1` |
 
-JIT、ABI 或 GPU smoke 失败时 `launch.sh` 自动把量化模式改为 `off`。`--disable-log-stats` 无数值影响，不单独设置回滚变量。
+请求 `w8`/`hybrid_w4` 时，wheel ABI、GPU smoke 或模型加载零量化层会直接终止启动，不再自动伪装为 `off`。明确设置 `FDU_GFX936_QUANT_MODE=off` 仍是可控回滚；`--disable-log-stats` 无数值影响。
 
 ## 提交前只做本地检查
 

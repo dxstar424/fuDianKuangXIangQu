@@ -29,6 +29,17 @@ class PreflightError(RuntimeError):
     pass
 
 
+def find_bundled_library() -> pathlib.Path:
+    spec = importlib.util.find_spec("vllm")
+    locations = () if spec is None else (spec.submodule_search_locations or ())
+    for location in locations:
+        package = pathlib.Path(location)
+        for candidate in sorted(package.glob("_rocm_C*.so")):
+            if candidate.is_file():
+                return candidate.resolve()
+    raise PreflightError("bundled vllm._rocm_C extension was not found")
+
+
 def validate_symbols(path: str | pathlib.Path) -> pathlib.Path:
     selected = pathlib.Path(path).expanduser()
     try:
@@ -47,6 +58,13 @@ def validate_symbols(path: str | pathlib.Path) -> pathlib.Path:
         raise PreflightError(
             f"gfx936 quant library must be a nonempty regular file: {resolved}"
         )
+    if resolved.name.startswith("_rocm_C"):
+        try:
+            importlib.import_module("torch")
+        except Exception as error:
+            raise PreflightError(
+                f"cannot load Torch dependencies for bundled extension: {error}"
+            ) from error
     try:
         library = ctypes.CDLL(str(resolved))
     except OSError as error:
@@ -217,7 +235,7 @@ def run_smoke(library: str | pathlib.Path, mode: str) -> list[dict[str, object]]
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Preflight the gfx936 quant library")
-    parser.add_argument("--library", required=True)
+    parser.add_argument("--library")
     parser.add_argument("--mode", choices=("off", "w8", "hybrid_w4"), required=True)
     parser.add_argument("--smoke", action="store_true")
     return parser.parse_args()
@@ -226,12 +244,13 @@ def parse_args() -> argparse.Namespace:
 def main() -> int:
     args = parse_args()
     report = {
-        "library": str(pathlib.Path(args.library).expanduser().resolve()),
+        "library": str(pathlib.Path(args.library).expanduser()) if args.library else "",
         "mode": args.mode,
         "checks": [],
     }
     try:
-        resolved = validate_symbols(args.library)
+        selected = args.library if args.library else find_bundled_library()
+        resolved = validate_symbols(selected)
         report["library"] = str(resolved)
         if args.smoke:
             report["checks"] = run_smoke(resolved, args.mode)

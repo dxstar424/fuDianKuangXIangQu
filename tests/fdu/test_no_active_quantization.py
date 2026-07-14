@@ -66,7 +66,7 @@ class NoActiveQuantizationTest(unittest.TestCase):
     def test_report_and_changelog_mark_old_routes_historical(self) -> None:
         report = (ROOT / "report.md").read_text()
         changelog = (ROOT / "changelog.md").read_text()
-        self.assertIn("当前提交路径（2026-07-14）", report)
+        self.assertIn("当前提交路径（2026-07-15）", report)
         self.assertIn("历史方案（非当前启动路径）", report)
         self.assertIn("v1.3.0-gfx936-online-quant", changelog)
         self.assertIn("历史实验（非当前启动路径）", changelog)
@@ -78,6 +78,17 @@ class NoActiveQuantizationTest(unittest.TestCase):
         for document in (readme, handoff, report):
             self.assertIn("评测提交 hash 尚未随结果记录", document)
         self.assertIn("不能将增益独立归因于 LLMM1", report)
+
+    def test_docs_record_latest_platform_result_and_bundled_w8_path(self) -> None:
+        readme = (ROOT / "README.md").read_text()
+        handoff = (ROOT / "docs/GFX936_HANDOFF.md").read_text()
+        report = (ROOT / "report.md").read_text()
+        changelog = (ROOT / "changelog.md").read_text()
+        for document in (readme, handoff, report, changelog):
+            self.assertIn("66.7878", document)
+        for document in (readme, handoff, report):
+            self.assertIn("_rocm_C", document)
+        self.assertIn("平台未提供日志", handoff)
 
 
 if __name__ == "__main__":

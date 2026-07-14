@@ -1,6 +1,6 @@
 # 当前平台提交检查清单
 
-> 适用路线：2026-07-14 原生 gfx936 BF16 保底 + gated online W8/W4。当前平台分支为 `dx_branch`；平台必须显式绑定该分支，或把同一提交同步到平台实际拉取的 `main`。
+> 适用路线：2026-07-15 原生 gfx936 BF16 保底 + wheel 内置 gated W8/W4。当前平台分支为 `dx_branch`；平台必须显式绑定该分支，或把同一提交同步到平台实际拉取的 `main`。
 
 ## 代码与 Git
 
@@ -24,6 +24,7 @@ git diff --check
 ```
 
 - [ ] 全部测试通过。
+- [ ] `CMakeLists.txt` 的 `_rocm_C` source list 包含 `csrc/fdu/gfx936_quant_gemv.hip`。
 - [ ] 活跃启动文件没有 AWQ、bitsandbytes、`--quantization` 或架构伪装。
 - [ ] `FDU_ENABLE=0`、`VLLM_ROCM_USE_AITER=0`。
 - [ ] `ENABLE_PREFIX_CACHING=1`、`--disable-log-stats` 生效，且没有 `--max-num-seqs`、`--max-num-batched-tokens` 或自定义 scheduler 参数。
@@ -31,7 +32,8 @@ git diff --check
 ## SCNet 门禁
 
 - [ ] 按 [SCNET_RUN.md](SCNET_RUN.md) 使用隔离 wrapper，不直接修改模型或 testdata。
-- [ ] JIT 首次编译 `<=50s`，第二次命中同一 `/tmp` `.so`。
+- [ ] candidate wheel 已重建，`_rocm_C` 暴露四个 `fdu_gfx936_*` ABI 符号并通过 GPU smoke；不能只同步 Python 文件。
+- [ ] 独立 JIT 微基准如需复现，首次编译 `<=50s` 且第二次命中同一 `/tmp` `.so`；它不再是服务启动依赖。
 - [ ] 六 shape JSON 含精确 commit、HIP source hash、有限数值和逐 shape admission。
 - [ ] 候选服务 probe 成功，日志模式与请求的 `FDU_GFX936_QUANT_MODE` 完全一致。
 - [ ] 三档无吞吐回退，TTFT/TPOT P99 留有 `< baseline×1.45` 余量。
@@ -40,10 +42,10 @@ git diff --check
 
 ## 默认模式选择
 
-> 本次提交例外：用户决定停止继续 SCNet，以 66.8175 为回滚基准，直接平台盲测选择性 W8。五个 shape 的已有 microbenchmark 为 `1.19x–1.53x`，`(5120,17408)` 自动拒绝并保留 BF16；端到端 SLA 与精度风险留给平台评测。
+> 本次提交例外：用户决定停止继续 SCNet。上一运行时 JIT 候选平台得到 66.7878，与 66.8175 基准统计等价且没有启动日志；因此下一候选只消除 W8 激活链的不确定性，端到端 SLA 与精度风险仍交给平台评测。
 
 - [ ] hybrid 只有在两个 MLP W4 数值通过、各自比 W8 microbenchmark `>=1.05x`，并且端到端 8–16K 比 W8 `>=1.03x` 时才可选。
-- [ ] 否则 W8 只有在 8–16K `>=12.60 tok/s`、三档/SLA/精度通过且加权投影高于 66.8175 时才可选。
+- [ ] 否则 W8 只有在 8–16K `>=12.60 tok/s`、三档/SLA/精度通过且加权投影高于 66.7878 时才可选。
 - [ ] 盲测提交将 `scripts/rocm_env.sh` 和 Dockerfile 同步设为 `FDU_GFX936_QUANT_MODE=w8`；回滚提交恢复 `off`。
 - [ ] 如需隔离 prefix cache，只设 `ENABLE_PREFIX_CACHING=0`，不要引入历史自定义 KV allocator。
 - [ ] 如果修改默认模式，同一提交同步更新 `docs/env_vars.md`、`docs/GFX936_HANDOFF.md`、`report.md` 和 `changelog.md`。

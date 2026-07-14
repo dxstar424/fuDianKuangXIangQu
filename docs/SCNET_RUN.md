@@ -1,6 +1,6 @@
 # SCNet gfx936 最快测试流程
 
-目标是用最少的模型加载次数判断在线 W8/W4 是否值得提交。`dx_branch` 已记录的保底参照是 15.03 / 12.00 / 6.09 tok/s、最终 66.8175；该次评测没有同步保存 commit hash，因此快速阶段只把它当方向基线，不把增益独立归因于 LLMM1，也不重复加载 `off`。
+目标是用最少的模型加载次数判断在线 W8/W4 是否值得提交。最新平台结果为 15.00 / 11.97 / 6.11 tok/s、最终 66.7878，与上一轮 66.8175 统计等价；两次评测都没有可用启动日志/精确 commit，因此快速阶段只把约 66.8 分当方向基线。正式候选模式仍由 `FDU_GFX936_QUANT_MODE` 选择。
 
 所有脚本只写 `/tmp` 和以下隔离目录，不修改模型与原始 testdata：
 
@@ -24,24 +24,18 @@ git rev-parse HEAD
 
 如果 `git status --short` 有本地改动，先停下确认，不要用强制 reset 覆盖。
 
-## 1. 初始化并复用现有 gfx936 wheel
+## 1. 初始化并重建当前 gfx936 wheel
 
 ```bash
 set -o pipefail
 cd /public/home/xdzs2026_c415/vllm_cscc
 bash scripts/scnet_ab_gfx936.sh init
-
-PY=/public/home/xdzs2026_c415/venvs/vllm_gfx936/bin/python
-if "$PY" -c 'import torch, vllm._custom_ops; assert hasattr(torch.ops._rocm_C, "LLMM1")'; then
-  bash scripts/scnet_ab_gfx936.sh sync-candidate-python
-else
-  bash scripts/scnet_ab_gfx936.sh build-candidate
-fi
+bash scripts/scnet_ab_gfx936.sh build-candidate
 ```
 
-`sync-candidate-python` 只覆盖本轮需要的 Python 文件，最快；仅当当前 venv 没有已经编译好的 `LLMM1` 扩展时才重建 wheel。
+正式 W8 内核现在编入 `vllm._rocm_C`，因此切到本提交后必须重建 candidate wheel；`sync-candidate-python` 不会更新 native ABI，不能用于验证该候选。
 
-## 2. 先测 JIT 编译预算
+## 2. 可选：复现独立 JIT kernel 微基准
 
 ```bash
 set -o pipefail
@@ -75,7 +69,7 @@ rm -rf "$COLD_CACHE"
 trap - EXIT
 ```
 
-继续条件：首次退出 0、`compile_wall_s <= 50`、输出 `.so` 存在，并且后两次得到相同缓存路径。失败则保持 `FDU_GFX936_QUANT_MODE=off`，本轮到此结束。
+该步骤只复现历史单 kernel 数据；正式服务使用 wheel 内 `_rocm_C`，不依赖这里的 `/tmp` `.so`。首次退出 0、`compile_wall_s <=50` 和重复缓存路径仍可用于确认 HIP 源本身可编译。
 
 ## 3. 六 shape W8 门禁
 
@@ -125,7 +119,7 @@ bash scripts/scnet_ab_gfx936.sh throughput 8-16K 3 w8-fast
 
 W8 继续条件：
 
-- 8–16K 吞吐至少 `12.60 tok/s`（相对已测 12.00 至少 +5%）；
+- 8–16K 吞吐至少 `12.60 tok/s`（相对最新 11.97 约 +5.3%）；
 - TTFT P99 与 TPOT P99 均不超过官方 baseline 的 `1.45x`，为 1.5x 硬门槛留余量；
 - `/tmp/fdu_gfx936_w8.log` 没有 OOM、Traceback、非有限指标或 `keeping BF16 path`；
 - 日志确认高字节量 shape 的量化层已被接纳；被拒 shape 明确回退 BF16。
@@ -202,7 +196,7 @@ bash scripts/scnet_ab_gfx936.sh stop
 
 不要直接在 `~/testdata` 运行；wrapper 会先复制只读 testdata，避免污染官方输入。
 
-胜者必须满足：三档均无吞吐回退、TTFT/TPOT 都在 1.45x 余量内、两项抽样精度相对保底路径下降不超过 1%、无失败请求/OOM/非有限值，并且加权投影高于 66.8175。完整平台评测仍是最终统计与四项精度验证。
+胜者必须满足：三档均无吞吐回退、TTFT/TPOT 都在 1.45x 余量内、两项抽样精度相对保底路径下降不超过 1%、无失败请求/OOM/非有限值，并且加权投影高于 66.7878。完整平台评测仍是最终统计与四项精度验证。
 
 ## 7. 把这些结果发回
 
@@ -224,4 +218,4 @@ bash scripts/scnet_ab_gfx936.sh stop
 /public/home/xdzs2026_c415/results/gfx936_skinny/throughput/hybrid-fast/8-16K.json
 ```
 
-通常的最终选择规则只有三种：hybrid 明确胜出则选 `hybrid_w4`；否则 W8 通过则选 `w8`；否则保持 `off`。本轮已停止继续 SCNet，并在记录风险后直接把选择性 `w8` 交给平台盲测。
+通常的最终选择规则只有三种：hybrid 明确胜出则选 `hybrid_w4`；否则 W8 通过则选 `w8`；否则保持 `off`。本轮已停止继续 SCNet；正式盲测候选使用 wheel 内置选择性 `w8`。

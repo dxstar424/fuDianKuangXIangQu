@@ -25,8 +25,8 @@ class Gfx936QuantPolicyTest(unittest.TestCase):
     def setUpClass(cls) -> None:
         cls.quant = _load_module()
 
-    def test_mode_parser_fails_closed(self) -> None:
-        self.assertEqual(self.quant.parse_quant_mode(None), "off")
+    def test_mode_parser_defaults_w8_but_invalid_values_fail_closed(self) -> None:
+        self.assertEqual(self.quant.parse_quant_mode(None), "w8")
         self.assertEqual(self.quant.parse_quant_mode("W8"), "w8")
         self.assertEqual(self.quant.parse_quant_mode(" hybrid_w4 "), "hybrid_w4")
         self.assertEqual(self.quant.parse_quant_mode("unexpected"), "off")

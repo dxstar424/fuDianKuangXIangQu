@@ -1171,7 +1171,8 @@ if(VLLM_GPU_LANG STREQUAL "HIP")
   set(VLLM_ROCM_EXT_SRC
     "csrc/rocm/torch_bindings.cpp"
     "csrc/rocm/skinny_gemms.cu"
-    "csrc/rocm/attention.cu")
+    "csrc/rocm/attention.cu"
+    "csrc/fdu/gfx936_quant_gemv.hip")
 
   define_extension_target(
     _rocm_C

@@ -17,6 +17,7 @@ from vllm.logger import init_logger
 from vllm.model_executor.layers.attention import Attention, MLAAttention
 from vllm.model_executor.layers.gfx936_online_quant import (
     online_quantization_active,
+    require_online_quantization,
 )
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
@@ -108,6 +109,7 @@ def process_weights_after_loading(
             with device_loading_context(module, target_device):
                 quant_method.process_weights_after_loading(module)
 
+    require_online_quantization()
     if online_quantization_active():
         torch.cuda.empty_cache()
 
