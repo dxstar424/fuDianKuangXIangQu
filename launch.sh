@@ -52,7 +52,6 @@ source "$SCRIPT_DIR/scripts/rocm_env.sh"
 EXPECTED_PREFIX="$("$PYTHON_BIN" -c 'import sys; print(sys.prefix)')"
 
 unset PYTHONPATH
-cd /tmp
 
 PREFLIGHT_ARGS=(
     "$SCRIPT_DIR/scripts/preflight_rocm.py"
@@ -66,6 +65,33 @@ then
 fi
 
 "$PYTHON_BIN" "${PREFLIGHT_ARGS[@]}"
+
+case "${FDU_GFX936_QUANT_MODE:-off}" in
+    off|w8|hybrid_w4) ;;
+    *)
+        echo "[fdu] invalid gfx936 quant mode; keeping BF16 path" >&2
+        export FDU_GFX936_QUANT_MODE=off
+        ;;
+esac
+
+if [[ "$FDU_GFX936_QUANT_MODE" != "off" ]]; then
+    if FDU_GFX936_QUANT_SO="$("$PYTHON_BIN" "$SCRIPT_DIR/scripts/build_gfx936_quant_jit.py" \
+        --source "$SCRIPT_DIR/csrc/fdu/gfx936_quant_gemv.hip" \
+        --arch gfx936 --timeout 45)" \
+        && [[ -n "$FDU_GFX936_QUANT_SO" ]] \
+        && "$PYTHON_BIN" "$SCRIPT_DIR/scripts/preflight_gfx936_quant.py" \
+            --library "$FDU_GFX936_QUANT_SO" \
+            --mode "$FDU_GFX936_QUANT_MODE" --smoke
+    then
+        export FDU_GFX936_QUANT_SO
+    else
+        echo "[fdu] gfx936 quant JIT/preflight failed; keeping BF16 path" >&2
+        export FDU_GFX936_QUANT_MODE=off
+        unset FDU_GFX936_QUANT_SO
+    fi
+fi
+
+cd /tmp
 
 VLLM_ARGS=(
     --model "$MODEL_PATH"

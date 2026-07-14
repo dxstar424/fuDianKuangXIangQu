@@ -44,11 +44,14 @@ class RuntimeContractTest(unittest.TestCase):
         text = _read(LAUNCH)
         self.assertNotRegex(text, r"(?m)^\s*export\s+PYTHONPATH=")
         self.assertNotIn("$SCRIPT_DIR:${PYTHONPATH", text)
+        self.assertRegex(text, r"(?m)^unset\s+PYTHONPATH\s*$")
         self.assertRegex(
             text,
             r'"\$\{?SCRIPT_DIR\}?/scripts/preflight_rocm\.py"',
         )
         self.assertRegex(text, r"--dtype\s+bfloat16\b")
+        self.assertNotRegex(text, r"--quantization(?:\s|=)")
+        self.assertNotIn("quant_force", text)
         self.assertNotIn("--max-num-seqs", text)
         self.assertNotIn("--max-num-batched-tokens", text)
 
@@ -64,6 +67,7 @@ class RuntimeContractTest(unittest.TestCase):
             "VLLM_ROCM_USE_AITER": "0",
             "VLLM_ROCM_USE_SKINNY_GEMM": "1",
             "FDU_FORCE_STOCK_GEMM": "0",
+            "FDU_GFX936_QUANT_MODE": "off",
         }
         for name, default in expected_defaults.items():
             with self.subTest(name=name):
