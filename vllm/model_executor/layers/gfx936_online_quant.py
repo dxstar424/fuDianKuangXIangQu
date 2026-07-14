@@ -32,8 +32,20 @@ class LoadedKernels(NamedTuple):
     w4_dequant: object
 
 
+class AdmissionResult(NamedTuple):
+    accepted: bool
+    nrmse: float
+    cosine: float
+    baseline_ms: float
+    candidate_ms: float
+    speedup: float
+    reason: str
+
+
 _LOADED_KERNELS: LoadedKernels | None = None
 _RUNTIME_FALLBACK_WARNED = False
+_ADMISSION_CACHE: dict[tuple[int, int, QuantKind], AdmissionResult] = {}
+_ACTIVE_LAYER_COUNT = 0
 logger = logging.getLogger(__name__)
 
 QUANT_SHAPES: frozenset[tuple[int, int]] = frozenset(
@@ -50,6 +62,13 @@ W4_MLP_SHAPES: frozenset[tuple[int, int]] = frozenset(
     {(34816, 5120), (5120, 17408)}
 )
 PACK_CHUNK_BYTES = 64 << 20
+W8_NRMSE_LIMIT = 0.015
+W8_COSINE_LIMIT = 0.999
+W4_NRMSE_LIMIT = 0.08
+W4_COSINE_LIMIT = 0.995
+MIN_SPEEDUP = 1.10
+WARMUP_REPETITIONS = 5
+TIMED_REPETITIONS = 30
 
 
 def parse_quant_mode(value: str | None = None) -> QuantMode:
@@ -71,6 +90,67 @@ def candidate_kinds(mode: str, m: int, k: int) -> tuple[QuantKind, ...]:
     if parsed == "hybrid_w4" and (m, k) in W4_MLP_SHAPES:
         return ("w4", "w8")
     return ("w8",)
+
+
+def admission_limits(kind: QuantKind) -> tuple[float, float]:
+    return (W4_NRMSE_LIMIT, W4_COSINE_LIMIT) if kind == "w4" else (
+        W8_NRMSE_LIMIT,
+        W8_COSINE_LIMIT,
+    )
+
+
+def evaluate_admission(
+    kind: QuantKind,
+    nrmse: float,
+    cosine: float,
+    baseline_ms: float,
+    candidate_ms: float,
+) -> AdmissionResult:
+    import math
+
+    nrmse_limit, cosine_limit = admission_limits(kind)
+    speedup = baseline_ms / candidate_ms if candidate_ms > 0 else 0.0
+    finite = all(math.isfinite(value) for value in (nrmse, cosine, speedup))
+    accepted = (
+        finite
+        and nrmse <= nrmse_limit
+        and cosine >= cosine_limit
+        and speedup >= MIN_SPEEDUP
+    )
+    reason = (
+        "accepted"
+        if accepted
+        else (
+            f"rejected:nrmse={nrmse:.6f},cosine={cosine:.6f},"
+            f"speedup={speedup:.3f}"
+        )
+    )
+    return AdmissionResult(
+        accepted,
+        nrmse,
+        cosine,
+        baseline_ms,
+        candidate_ms,
+        speedup,
+        reason,
+    )
+
+
+def is_gfx936_runtime() -> bool:
+    import torch
+
+    if not torch.cuda.is_available():
+        return False
+    properties = torch.cuda.get_device_properties(torch.cuda.current_device())
+    return "gfx936" in getattr(properties, "gcnArchName", "")
+
+
+def is_gfx936_quantized_layer(layer: object) -> bool:
+    return bool(getattr(layer, "_fdu_gfx936_quantized", False))
+
+
+def online_quantization_active() -> bool:
+    return _ACTIVE_LAYER_COUNT > 0
 
 
 def iter_row_chunks(
@@ -275,6 +355,109 @@ def run_quant_gemv(x, packed, scale, kind: int, m: int, k: int):
     return output.reshape(*x.shape[:-1], m)
 
 
+def _median_cuda_ms(operation, repetitions: int) -> float:
+    import statistics
+
+    import torch
+
+    samples: list[float] = []
+    for _ in range(repetitions):
+        start = torch.cuda.Event(enable_timing=True)
+        end = torch.cuda.Event(enable_timing=True)
+        start.record()
+        output = operation()
+        end.record()
+        torch.cuda.synchronize()
+        samples.append(float(start.elapsed_time(end)))
+        del output
+    return float(statistics.median(samples))
+
+
+def benchmark_candidate(
+    weight: "torch.Tensor",
+    packed: "torch.Tensor",
+    scale: "torch.Tensor",
+    kind: QuantKind,
+    *,
+    warmup_repetitions: int = WARMUP_REPETITIONS,
+    timed_repetitions: int = TIMED_REPETITIONS,
+) -> AdmissionResult:
+    import torch
+    import torch.nn.functional as functional
+
+    from vllm.model_executor.layers.utils import rocm_unquantized_gemm_impl
+
+    if warmup_repetitions <= 0 or timed_repetitions <= 0:
+        raise ValueError("benchmark repetition counts must be positive")
+
+    m, k = map(int, weight.shape)
+    kernel_kind = KIND_W4 if kind == "w4" else KIND_W8
+    x = torch.linspace(
+        -1,
+        1,
+        k,
+        dtype=torch.bfloat16,
+        device=weight.device,
+    ).reshape(1, k)
+
+    reference = functional.linear(x, weight)
+    candidate = run_quant_gemv(x, packed, scale, kernel_kind, m, k)
+    reference_fp32 = reference.float()
+    candidate_fp32 = candidate.float()
+    difference = candidate_fp32 - reference_fp32
+    rmse = float(torch.sqrt(torch.mean(difference.square())).item())
+    reference_rms = float(torch.sqrt(torch.mean(reference_fp32.square())).item())
+    nrmse = rmse / max(reference_rms, 1e-12)
+    cosine = float(
+        functional.cosine_similarity(
+            candidate_fp32.reshape(-1),
+            reference_fp32.reshape(-1),
+            dim=0,
+            eps=1e-12,
+        ).item()
+    )
+    del reference, candidate, reference_fp32, candidate_fp32, difference
+
+    for _ in range(warmup_repetitions):
+        baseline_output = rocm_unquantized_gemm_impl(x, weight, None)
+        candidate_output = run_quant_gemv(
+            x, packed, scale, kernel_kind, m, k
+        )
+        del baseline_output, candidate_output
+    torch.cuda.synchronize()
+
+    baseline_ms = _median_cuda_ms(
+        lambda: rocm_unquantized_gemm_impl(x, weight, None),
+        timed_repetitions,
+    )
+    candidate_ms = _median_cuda_ms(
+        lambda: run_quant_gemv(x, packed, scale, kernel_kind, m, k),
+        timed_repetitions,
+    )
+    result = evaluate_admission(
+        kind,
+        nrmse,
+        cosine,
+        baseline_ms,
+        candidate_ms,
+    )
+    logger.info(
+        "gfx936_quant_admission m=%d k=%d kind=%s nrmse=%.6f "
+        "cosine=%.6f baseline_ms=%.6f candidate_ms=%.6f "
+        "speedup=%.3f decision=%s",
+        m,
+        k,
+        kind,
+        result.nrmse,
+        result.cosine,
+        result.baseline_ms,
+        result.candidate_ms,
+        result.speedup,
+        result.reason,
+    )
+    return result
+
+
 def quant_linear_impl(x, packed, scale, kind: int, m: int, k: int, bias=None):
     import torch.nn.functional as functional
 
@@ -289,6 +472,118 @@ def quant_linear_impl(x, packed, scale, kind: int, m: int, k: int, bias=None):
         return functional.linear(x, bf16_weight, bias)
     finally:
         del bf16_weight
+
+
+def _conversion_error_result(error: Exception) -> AdmissionResult:
+    not_a_number = float("nan")
+    return AdmissionResult(
+        False,
+        not_a_number,
+        not_a_number,
+        0.0,
+        0.0,
+        0.0,
+        f"rejected:error={type(error).__name__}:{error}",
+    )
+
+
+def _install_quantized_weight(layer, packed, scale, kind: QuantKind, m: int, k: int):
+    global _ACTIVE_LAYER_COUNT
+
+    original_parameter = layer._parameters.pop("weight")
+    try:
+        layer.register_buffer("weight", packed, persistent=False)
+        layer.register_buffer("gfx936_scale", scale, persistent=False)
+        layer._fdu_gfx936_quantized = True
+        layer._fdu_gfx936_quant_kind = KIND_W4 if kind == "w4" else KIND_W8
+        layer._fdu_gfx936_quant_m = m
+        layer._fdu_gfx936_quant_k = k
+    except Exception:
+        layer._buffers.pop("weight", None)
+        layer._buffers.pop("gfx936_scale", None)
+        non_persistent = getattr(layer, "_non_persistent_buffers_set", set())
+        non_persistent.discard("weight")
+        non_persistent.discard("gfx936_scale")
+        for attribute in (
+            "_fdu_gfx936_quantized",
+            "_fdu_gfx936_quant_kind",
+            "_fdu_gfx936_quant_m",
+            "_fdu_gfx936_quant_k",
+        ):
+            layer.__dict__.pop(attribute, None)
+        layer._parameters["weight"] = original_parameter
+        raise
+    _ACTIVE_LAYER_COUNT += 1
+    del original_parameter
+
+
+def maybe_quantize_gfx936_layer(layer: object) -> object:
+    if is_gfx936_quantized_layer(layer):
+        return layer
+
+    mode = parse_quant_mode()
+    if mode == "off":
+        return layer
+
+    try:
+        load_kernel_library()
+        if not is_gfx936_runtime():
+            return layer
+
+        import torch
+
+        weight = getattr(layer, "weight", None)
+        if (
+            weight is None
+            or getattr(weight, "ndim", None) != 2
+            or not weight.is_contiguous()
+            or weight.dtype != torch.bfloat16
+            or getattr(weight.device, "type", None) != "cuda"
+            or getattr(layer, "bias", None) is not None
+        ):
+            return layer
+        m, k = map(int, weight.shape)
+        if not is_quant_shape(m, k):
+            return layer
+    except Exception as error:
+        logger.warning("gfx936 quant layer eligibility failed open: %s", error)
+        return layer
+
+    for kind in candidate_kinds(mode, m, k):
+        cache_key = (m, k, kind)
+        decision = _ADMISSION_CACHE.get(cache_key)
+        if decision is not None and not decision.accepted:
+            continue
+
+        packed = None
+        scale = None
+        try:
+            packed, scale = pack_weight(weight, kind)
+            if decision is None:
+                decision = benchmark_candidate(weight, packed, scale, kind)
+                _ADMISSION_CACHE[cache_key] = decision
+            if not decision.accepted:
+                del packed, scale
+                continue
+
+            _install_quantized_weight(layer, packed, scale, kind, m, k)
+        except Exception as error:
+            _ADMISSION_CACHE[cache_key] = _conversion_error_result(error)
+            logger.warning(
+                "gfx936 quant conversion failed open m=%d k=%d kind=%s: %s",
+                m,
+                k,
+                kind,
+                error,
+            )
+            del packed, scale
+            continue
+
+        logger.info("gfx936 quant selected m=%d k=%d kind=%s", m, k, kind)
+        del weight
+        return layer
+
+    return layer
 
 
 def _symmetric_quantize(values: Sequence[float], limit: int) -> tuple[list[int], float]:

@@ -21,12 +21,17 @@ from vllm.model_executor.layers.batch_invariant import (
     linear_batch_invariant,
     vllm_is_batch_invariant,
 )
+from vllm.model_executor.layers.gfx936_online_quant import (
+    is_gfx936_quantized_layer,
+    maybe_quantize_gfx936_layer,
+)
 from vllm.model_executor.layers.quantization.base_config import (
     QuantizationConfig,
     QuantizeMethodBase,
 )
 from vllm.model_executor.layers.utils import (
     dispatch_unquantized_gemm,
+    gfx936_quant_linear,
 )
 from vllm.model_executor.parameter import (
     BasevLLMParameter,
@@ -216,6 +221,7 @@ class UnquantizedLinearMethod(LinearMethodBase):
             from vllm.model_executor.layers.utils import dispatch_cpu_unquantized_gemm
 
             dispatch_cpu_unquantized_gemm(layer, remove_weight=True)
+        maybe_quantize_gfx936_layer(layer)
 
     def apply(
         self,
@@ -223,6 +229,16 @@ class UnquantizedLinearMethod(LinearMethodBase):
         x: torch.Tensor,
         bias: torch.Tensor | None = None,
     ) -> torch.Tensor:
+        if is_gfx936_quantized_layer(layer):
+            return gfx936_quant_linear(
+                x,
+                layer.weight,
+                layer.gfx936_scale,
+                layer._fdu_gfx936_quant_kind,
+                layer._fdu_gfx936_quant_m,
+                layer._fdu_gfx936_quant_k,
+                bias,
+            )
         if vllm_is_batch_invariant() and current_platform.is_cuda_alike():
             return linear_batch_invariant(x, layer.weight, bias)
         return dispatch_unquantized_gemm()(layer, x, layer.weight, bias)

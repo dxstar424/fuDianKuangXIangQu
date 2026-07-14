@@ -241,6 +241,52 @@ direct_register_custom_op(
 )
 
 
+def gfx936_quant_linear_impl(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    scale: torch.Tensor,
+    kind: int,
+    m: int,
+    k: int,
+    bias: torch.Tensor | None = None,
+) -> torch.Tensor:
+    from vllm.model_executor.layers.gfx936_online_quant import quant_linear_impl
+
+    return quant_linear_impl(x, weight, scale, kind, m, k, bias)
+
+
+def gfx936_quant_linear_fake(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    scale: torch.Tensor,
+    kind: int,
+    m: int,
+    k: int,
+    bias: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return x.new_empty((*x.shape[:-1], m))
+
+
+direct_register_custom_op(
+    op_name="gfx936_quant_linear",
+    op_func=gfx936_quant_linear_impl,
+    mutates_args=[],
+    fake_impl=gfx936_quant_linear_fake,
+)
+
+
+def gfx936_quant_linear(
+    x: torch.Tensor,
+    weight: torch.Tensor,
+    scale: torch.Tensor,
+    kind: int,
+    m: int,
+    k: int,
+    bias: torch.Tensor | None = None,
+) -> torch.Tensor:
+    return torch.ops.vllm.gfx936_quant_linear(x, weight, scale, kind, m, k, bias)
+
+
 def check_cpu_sgl_kernel(n: int, k: int, dtype: torch.dtype) -> bool:
     return (
         torch._C._cpu._is_amx_tile_supported()
