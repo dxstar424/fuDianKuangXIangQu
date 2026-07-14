@@ -1,0 +1,96 @@
+from __future__ import annotations
+
+import ast
+import importlib.util
+import os
+import tempfile
+import unittest
+from pathlib import Path
+from unittest import mock
+
+ROOT = Path(__file__).resolve().parents[2]
+MODULE_PATH = ROOT / "vllm/model_executor/layers/gfx936_online_quant.py"
+
+
+def _load_module():
+    spec = importlib.util.spec_from_file_location(
+        "gfx936_online_quant_runtime_under_test", MODULE_PATH
+    )
+    if spec is None or spec.loader is None:
+        raise RuntimeError(f"cannot load {MODULE_PATH}")
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+class _Symbol:
+    def __init__(self) -> None:
+        self.argtypes = None
+        self.restype = None
+
+    def __call__(self, *args):
+        return 0
+
+
+class _Library:
+    def __init__(self) -> None:
+        self.fdu_gfx936_w8a16_gemv = _Symbol()
+        self.fdu_gfx936_w4a16_gemv = _Symbol()
+        self.fdu_gfx936_w8_dequant = _Symbol()
+        self.fdu_gfx936_w4_dequant = _Symbol()
+
+
+class Gfx936QuantRuntimeContractTest(unittest.TestCase):
+    @classmethod
+    def setUpClass(cls) -> None:
+        cls.source = MODULE_PATH.read_text()
+        cls.tree = ast.parse(cls.source)
+        cls.quant = _load_module()
+
+    def test_torch_is_not_imported_at_module_scope(self) -> None:
+        imports = [
+            node
+            for node in self.tree.body
+            if isinstance(node, (ast.Import, ast.ImportFrom))
+        ]
+        self.assertFalse(
+            any(
+                (
+                    isinstance(node, ast.Import)
+                    and any(alias.name == "torch" for alias in node.names)
+                )
+                or (isinstance(node, ast.ImportFrom) and node.module == "torch")
+                for node in imports
+            )
+        )
+
+    def test_exact_abi_symbols_are_required(self) -> None:
+        self.assertEqual(
+            self.quant.REQUIRED_SYMBOLS,
+            (
+                "fdu_gfx936_w8a16_gemv",
+                "fdu_gfx936_w4a16_gemv",
+                "fdu_gfx936_w8_dequant",
+                "fdu_gfx936_w4_dequant",
+            ),
+        )
+
+    def test_loader_binds_pointer_and_integer_arguments(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            library_path = Path(directory) / "kernel.so"
+            library_path.write_bytes(b"fixture")
+            fake = _Library()
+            with mock.patch.object(self.quant.ctypes, "CDLL", return_value=fake):
+                loaded = self.quant.load_kernel_library(library_path)
+            self.assertIs(loaded.library, fake)
+            self.assertEqual(len(fake.fdu_gfx936_w8a16_gemv.argtypes), 7)
+            self.assertEqual(len(fake.fdu_gfx936_w8_dequant.argtypes), 6)
+
+    def test_missing_library_fails_without_loading_torch(self) -> None:
+        with mock.patch.dict(os.environ, {}, clear=True):
+            with self.assertRaises(FileNotFoundError):
+                self.quant.load_kernel_library()
+
+
+if __name__ == "__main__":
+    unittest.main()
