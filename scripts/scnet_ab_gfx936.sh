@@ -129,7 +129,7 @@ sync_candidate_python() {
     done
     "$CANDIDATE_VENV/bin/python" -m py_compile "${copied[@]}"
     if ! "$CANDIDATE_VENV/bin/python" -c \
-        'import vllm._custom_ops as ops; raise SystemExit(0 if hasattr(ops, "LLMM1") else 1)'
+        'import torch, vllm._custom_ops; raise SystemExit(0 if hasattr(torch.ops._rocm_C, "LLMM1") else 1)'
     then
         echo "candidate extension is missing LLMM1; run build-candidate once: $0 build-candidate" >&2
         exit 2
@@ -137,7 +137,7 @@ sync_candidate_python() {
 }
 
 quant_bench() {
-    local quant_mode="$1" output log library
+    local quant_mode="$1" output log library source_commit
     case "$quant_mode" in
         w8)
             output=/tmp/fdu_gfx936_quant_w8.json
@@ -149,10 +149,15 @@ quant_bench() {
             ;;
         *) echo "unsupported quant benchmark mode: $quant_mode" >&2; exit 2 ;;
     esac
+    stop_server
     require_file "$SOURCE_ROOT/csrc/fdu/gfx936_quant_gemv.hip"
     require_file "$SOURCE_ROOT/scripts/build_gfx936_quant_jit.py"
     require_file "$SOURCE_ROOT/scripts/preflight_gfx936_quant.py"
     require_file "$SOURCE_ROOT/scripts/bench_gfx936_quant.py"
+    source_commit="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null)" || {
+        echo "cannot record source commit from $REPO_ROOT" >&2
+        exit 2
+    }
     library="$("$CANDIDATE_VENV/bin/python" \
         "$SOURCE_ROOT/scripts/build_gfx936_quant_jit.py" \
         --source "$SOURCE_ROOT/csrc/fdu/gfx936_quant_gemv.hip" \
@@ -163,7 +168,7 @@ quant_bench() {
             "$CANDIDATE_VENV/bin/python" \
             "$SOURCE_ROOT/scripts/preflight_gfx936_quant.py" \
             --library "$library" --mode "$quant_mode" --smoke
-        FDU_GFX936_QUANT_SO="$library" \
+        FDU_SOURCE_COMMIT="$source_commit" FDU_GFX936_QUANT_SO="$library" \
             "$CANDIDATE_VENV/bin/python" -u \
             "$SOURCE_ROOT/scripts/bench_gfx936_quant.py" \
             --mode "$quant_mode" --library "$library" --output "$output" \
@@ -188,6 +193,28 @@ stop_server() {
         fi
     fi
     rm -f "$pid_file" "$RESULTS_ROOT/server.json"
+}
+
+verify_quant_mode_log() {
+    local quant_mode="$1" log="$2"
+    require_file "$log"
+    if ! grep -Fqx "[gfx936:start] quant_mode=$quant_mode" "$log"; then
+        echo "server log does not declare requested quant_mode=$quant_mode" >&2
+        return 2
+    fi
+    if grep -Eo 'quant_mode=(off|w8|hybrid_w4)' "$log" \
+        | grep -Fvx "quant_mode=$quant_mode" >/dev/null
+    then
+        echo "server log declares another quant mode" >&2
+        return 2
+    fi
+    if grep -Eiq \
+        'Traceback|non-finite admission|OOM|out of memory|keeping BF16 path|nrmse=(nan|[+-]?inf)|cosine=(nan|[+-]?inf)|speedup=(nan|[+-]?inf)' \
+        "$log"
+    then
+        echo "server log contains a fatal quantization marker" >&2
+        return 2
+    fi
 }
 
 start_server() {
@@ -222,6 +249,11 @@ start_server() {
     local waited=0
     while (( waited < 1200 )); do
         if curl -fsS "http://127.0.0.1:$PORT/health" >/dev/null 2>&1; then
+            if ! verify_quant_mode_log "$quant_mode" "$log"; then
+                tail -n 200 "$log" >&2 || true
+                stop_server
+                return 2
+            fi
             echo "$label healthy on port $PORT (pid $pid)"
             return 0
         fi
@@ -281,23 +313,7 @@ if not isinstance(content, str) or not content.strip():
     raise SystemExit("probe response has no generated content")
 output.write_text(json.dumps(result, ensure_ascii=False, indent=2) + "\n")
 PY
-    if ! grep -Fqx "[gfx936:start] quant_mode=$quant_mode" "$log"; then
-        echo "server log does not declare requested quant_mode=$quant_mode" >&2
-        return 2
-    fi
-    if grep -Eo 'quant_mode=(off|w8|hybrid_w4)' "$log" \
-        | grep -Fvx "quant_mode=$quant_mode" >/dev/null
-    then
-        echo "server log declares another quant mode" >&2
-        return 2
-    fi
-    if grep -Eiq \
-        'Traceback|non-finite admission|OOM|out of memory|keeping BF16 path|nrmse=(nan|[+-]?inf)|cosine=(nan|[+-]?inf)|speedup=(nan|[+-]?inf)' \
-        "$log"
-    then
-        echo "server log contains a fatal quantization marker" >&2
-        return 2
-    fi
+    verify_quant_mode_log "$quant_mode" "$log"
 }
 
 fresh_eval_copy() {

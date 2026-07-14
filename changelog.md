@@ -1,5 +1,20 @@
 # 变更日志
 
+## [v1.3.0-gfx936-online-quant] - 2026-07-14
+
+### 在线 W8/W4 JIT 候选与快速 SCNet 门禁
+
+- 保留平台已测 66.8175 分的原生 gfx936 BF16/LLMM1 路径，并把 `FDU_GFX936_QUANT_MODE=off` 设为安全默认值。
+- 新增 Torch-header-free HIP JIT builder：只编译原生 `gfx936`，45 秒超时，按源码/编译器/flags 哈希，并原子写入临时 `/tmp` `.so`。
+- 新增 W8A16 N=1 decode GEMV，以及两个 MLP shape 的 group-32 W4A16 候选；prefill 临时重构 BF16，未接纳 shape 保持 LLMM1/stock BF16。
+- 新增六 shape 数值、速度、显存 benchmark。W8 要求 NRMSE `<=0.015`、cosine `>=0.999`，W4 要求 NRMSE `<=0.08`、cosine `>=0.995`，两者均要求至少 `1.10x` shape-level speedup。
+- 新增 model-load 后逐 shape admission、W4 → W8 → BF16 回退、opaque Torch op、ABI 错误保护和 allocator cache 释放。
+- 新增 `off` / `w8` / `hybrid_w4` 的 SCNet 启动、探针、吞吐与精度 wrapper；快速顺序优先测试六 shape 和 8–16K 三样本，避免重复加载已测 `off`。
+- 修复候选 fail-open 仍被 `/health` 误报为健康：请求量化模式与日志实际模式不一致、出现 `keeping BF16 path` 或非有限/OOM 标记时立即停止服务。
+- 修复 benchmark 外层 `tee` 可能掩盖失败码；操作手册不再给 `quant-bench-*` 叠加第二层 pipeline。
+- 修复隔离实验副本不含 `.git` 时结果缺少 provenance：wrapper 传入原仓库精确 40 位提交号，JSON 同时记录 HIP 源 SHA-256。
+- W8/hybrid 尚待 SCNet 实测；在吞吐、SLA 和抽样精度门禁完成前不修改默认 `off`，不声明理论加速为实测结果。
+
 ## [v1.2.0-gfx936-bf16] - 2026-07-14
 
 ### 原生 gfx936 BF16 窄路径

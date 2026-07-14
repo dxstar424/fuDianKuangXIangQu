@@ -7,6 +7,7 @@ import unittest
 
 ROOT = Path(__file__).resolve().parents[2]
 SCRIPT = ROOT / "scripts/scnet_ab_gfx936.sh"
+RUNBOOK = ROOT / "docs/SCNET_RUN.md"
 
 
 class ScnetAbGfx936FastPathContractTest(unittest.TestCase):
@@ -49,9 +50,19 @@ class ScnetAbGfx936FastPathContractTest(unittest.TestCase):
         ):
             self.assertIn(relative, self.text)
         self.assertIn("py_compile", self.text)
-        self.assertIn("vllm._custom_ops", self.text)
+        self.assertIn("torch.ops._rocm_C", self.text)
         self.assertIn("LLMM1", self.text)
         self.assertIn("run build-candidate once", self.text)
+
+    def test_quant_benchmark_stops_any_model_server_first(self) -> None:
+        start = self.text.index("quant_bench()")
+        end = self.text.index("stop_server()", start)
+        quant_bench = self.text[start:end]
+        self.assertIn("stop_server", quant_bench)
+        self.assertLess(
+            quant_bench.index("stop_server"),
+            quant_bench.index("build_gfx936_quant_jit.py"),
+        )
 
     def test_sync_allows_new_destination_files_but_requires_parent(self) -> None:
         self.assertIn('require_file "$source"', self.text)
@@ -77,6 +88,40 @@ class ScnetAbGfx936FastPathContractTest(unittest.TestCase):
         for marker in ("Traceback", "non-finite admission", "OOM", "out of memory"):
             self.assertIn(marker, self.text)
         self.assertIn('$RESULTS_ROOT/probes/', self.text)
+
+    def test_start_server_rejects_quant_fail_open_before_reporting_healthy(self) -> None:
+        start = self.text.index("start_server()")
+        end = self.text.index("probe()", start)
+        start_server = self.text[start:end]
+        health = start_server.index('curl -fsS "http://127.0.0.1:$PORT/health"')
+        healthy = start_server.index('echo "$label healthy', health)
+        marker = 'verify_quant_mode_log "$quant_mode" "$log"'
+        self.assertIn(marker, start_server)
+        verification = start_server.index(
+            marker, health
+        )
+        self.assertLess(verification, healthy)
+
+    def test_quant_benchmark_records_exact_source_commit(self) -> None:
+        self.assertIn('FDU_SOURCE_COMMIT=', self.text)
+        self.assertIn('FDU_SOURCE_COMMIT="$source_commit"', self.text)
+
+    def test_fast_runbook_preserves_pipeline_failures_and_probes_before_throughput(self) -> None:
+        runbook = RUNBOOK.read_text(encoding="utf-8")
+        self.assertIn("set -o pipefail", runbook)
+        self.assertIn("quant-bench-w8", runbook)
+        self.assertNotRegex(runbook, r"quant-bench-w8[^\n]*\|\s*tee")
+        self.assertIn("mktemp -d /tmp/fdu_gfx936_quant_cold.", runbook)
+        self.assertIn('--cache-root "$COLD_CACHE"', runbook)
+        self.assertLess(
+            runbook.index("probe-candidate-w8"),
+            runbook.index('throughput 8-16K 3'),
+        )
+        hybrid = runbook.index("quant-bench-hybrid")
+        self.assertIn(
+            "scnet_ab_gfx936.sh stop",
+            runbook[max(0, hybrid - 250) : hybrid],
+        )
 
     def test_preserves_every_legacy_command(self) -> None:
         for command in (

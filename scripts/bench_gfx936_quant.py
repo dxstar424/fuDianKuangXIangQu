@@ -236,6 +236,11 @@ def _run_shape(
 
 
 def _git_commit() -> str | None:
+    explicit = os.getenv("FDU_SOURCE_COMMIT", "").strip().lower()
+    if len(explicit) == 40 and all(
+        character in "0123456789abcdef" for character in explicit
+    ):
+        return explicit
     try:
         completed = subprocess.run(
             ["git", "rev-parse", "HEAD"],

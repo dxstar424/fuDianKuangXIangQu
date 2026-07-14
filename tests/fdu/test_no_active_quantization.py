@@ -45,12 +45,25 @@ class NoActiveQuantizationTest(unittest.TestCase):
         self.assertNotIn("HSA_OVERRIDE_GFX_VERSION=", env_doc)
         self.assertNotIn("pkill -f", run_doc)
 
+    def test_active_docs_describe_the_online_quant_gate_and_safe_default(self) -> None:
+        readme = (ROOT / "README.md").read_text()
+        env_doc = (ROOT / "docs/env_vars.md").read_text()
+        run_doc = (ROOT / "docs/SCNET_RUN.md").read_text()
+        handoff = (ROOT / "docs/GFX936_HANDOFF.md").read_text()
+        report = (ROOT / "report.md").read_text()
+        for document in (readme, env_doc, run_doc, handoff, report):
+            self.assertIn("FDU_GFX936_QUANT_MODE", document)
+        self.assertIn("quant-bench-w8", run_doc)
+        self.assertIn("默认", env_doc)
+        self.assertIn("off", env_doc)
+        self.assertNotIn("src/fdu_vllm/                   # vLLM 插件入口（主要改动区）", readme)
+
     def test_report_and_changelog_mark_old_routes_historical(self) -> None:
         report = (ROOT / "report.md").read_text()
         changelog = (ROOT / "changelog.md").read_text()
         self.assertIn("当前提交路径（2026-07-14）", report)
         self.assertIn("历史方案（非当前启动路径）", report)
-        self.assertIn("v1.2.0-gfx936-bf16", changelog)
+        self.assertIn("v1.3.0-gfx936-online-quant", changelog)
         self.assertIn("历史实验（非当前启动路径）", changelog)
 
 

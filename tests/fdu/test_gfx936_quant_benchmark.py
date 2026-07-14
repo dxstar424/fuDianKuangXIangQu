@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import ast
 import importlib.util
+import os
 from pathlib import Path
 import sys
 import unittest
@@ -98,6 +99,13 @@ class Gfx936QuantBenchmarkTest(unittest.TestCase):
                 imported_roots.add(node.module.split(".", 1)[0])
         self.assertNotIn("torch", imported_roots)
         self.assertNotIn("vllm", imported_roots)
+
+    def test_git_commit_prefers_explicit_source_provenance(self) -> None:
+        expected = "1" * 40
+        with mock.patch.dict(
+            os.environ, {"FDU_SOURCE_COMMIT": expected}, clear=False
+        ):
+            self.assertEqual(self.benchmark._git_commit(), expected)
 
 
 if __name__ == "__main__":

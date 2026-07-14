@@ -1,167 +1,100 @@
-# Pra2026 — 基于国产加速卡的 Qwen 大模型推理服务优化
+# 先导杯 2026：Qwen3.5-27B 单 DCU 推理优化
 
-> **其他 Agent 请先读**：[../AGENTS.md](../AGENTS.md)（工作区必读，含目录地图、红线、优先级）
+本仓库面向 vLLM 0.18.1、Qwen3.5-27B BF16 和单张原生 `gfx936` DCU。目标是在 TTFT/TPOT SLA 与精度门槛内提高输出 token 吞吐。
 
-> 🏆 2026 年全国大学生计算机系统能力大赛 · 智能计算创新设计赛（先导杯）
->
-> 赛题：基于国产加速卡（DCU）的千问大模型推理服务优化
+## 当前路线
 
-[Python](https://www.python.org/)
-[vLLM](https://github.com/vllm-project/vllm)
-[PyTorch](https://pytorch.org/)
-[ROCm](https://www.amd.com/en/products/software/rocm.html)
+当前安全默认值是：
 
-## 概述
-
-本项目以 **Qwen3.5-27B (bf16)** 模型为优化对象，在 **vLLM 0.18.1** 推理框架与 **DCU 加速卡**（单卡）的统一容器环境下，进行系统级推理性能优化。核心目标：**在满足 TTFT / TPOT SLA 硬性约束的前提下，最大化输出吞吐量**。
-
-### 优化策略全景
-
-```
-最终得分 = 吞吐量得分 × 精度系数
-    │
-    ├── KV Cache 优化 ──── 分级块分配 · 碎片整理 · KV FP8 量化 · Prefix 缓存
-    ├── Decode 算子优化 ── HIP FlashAttention · GQA 优化 · MFMA 加速 · LDS 利用
-    └── 执行路径优化 ──── HIP Graph 捕获 · 调度批量化 · 异步 SDMA 传输
+```text
+原始 BF16 checkpoint
+  -> 原生 gfx936 wheel
+  -> 5 个 SCNet 已验证的 N=1 shape 使用 BF16 LLMM1
+  -> 其他 shape 使用 stock BF16 linear
+  -> FDU_GFX936_QUANT_MODE=off
 ```
 
+该保底路径的平台实测为：
 
+| 指标 | 实测值 |
+|---|---:|
+| 4–8K 吞吐 | 15.03 tok/s |
+| 8–16K 吞吐 | 12.00 tok/s |
+| 16–32K 吞吐 | 6.09 tok/s |
+| SLA 扣分 | 0 |
+| 精度扣分 | 0 |
+| 最终得分 | 66.8175 |
 
-## 项目结构
+当前新增候选是在评测机启动时 JIT 编译的小型 HIP 库，并对六类精确 shape 做在线、进程内权重量化：
 
+| `FDU_GFX936_QUANT_MODE` | 行为 |
+|---|---|
+| `off`（默认） | 已测 BF16/LLMM1 保底路径 |
+| `w8` | 通过门禁的 shape 使用 W8A16 N=1 GEMV |
+| `hybrid_w4` | 两个 MLP shape 优先 group-32 W4，其余使用 W8；逐 shape 失败回退 |
+
+量化候选只在运行进程的显存中生成 packed weight 和 scale，不修改 checkpoint，也不把量化权重写入模型目录或持久目录。N=1 decode 使用自定义 HIP GEMV；prefill 临时还原 BF16 后走现有 linear。编译、ABI、数值或速度门禁失败时保持 BF16 路径。
+
+W8/W4 尚未取得 SCNet 端到端数据，因此不能声称已经提速，也不会在实测前把默认值从 `off` 改掉。最快验证步骤见 [docs/SCNET_RUN.md](docs/SCNET_RUN.md)。
+
+## 关键实现
+
+```text
+launch.sh
+scripts/rocm_env.sh
+scripts/scnet_ab_gfx936.sh
+scripts/build_gfx936_quant_jit.py
+scripts/preflight_gfx936_quant.py
+scripts/bench_gfx936_quant.py
+
+csrc/fdu/gfx936_quant_gemv.hip
+vllm/model_executor/layers/gfx936_online_quant.py
+vllm/model_executor/layers/linear.py
+vllm/model_executor/layers/utils.py
+vllm/model_executor/layers/rocm_skinny_shapes.py
+
+docs/SCNET_RUN.md
+docs/GFX936_HANDOFF.md
+docs/env_vars.md
+report.md
 ```
-compute/                              # 工作区根（非 git）
-├── AGENTS.md                           # Agent 必读
-├── baseline/                           # ← 本仓库（竞赛提交）
-│   ├── baseline/                       # stock vLLM 对照（launch.sh + config.yaml）
-│   ├── launch.sh                       # 优化版启动（fdu_vllm）
-│   ├── config.yaml                     # 可调参数
-│   ├── src/fdu_vllm/                   # vLLM 插件入口（主要改动区）
-│   ├── src/{kv_cache,attention,...}/   # 优化模块
-│   ├── scripts/                        # 评测、编译、SCNet 脚本
-│   ├── docs/                           # 队内战术文档（roadmap 为总入口）
-│   └── patches/vllm_cscc/              # vLLM 补丁
-├── infra/                              # SSH/容器连接（不提交）
-└── docs/official/                      # 赛题原文参考（不提交）
-```
 
+仓库根目录的 `fdu_vllm/` 和 `src/` 保留历史实验代码；当前启动链设置 `FDU_ENABLE=0`，不依赖这些插件钩子。
 
+## 本地静态验证
 
-## 快速开始
-
-
-
-### SCNet 调试（选手 PDF 流程）
+macOS 没有 ROCm/DCU，只运行不依赖 GPU 的契约测试：
 
 ```bash
-bash scripts/scnet_setup.sh          # Phase 0: vLLM 编译 + 模型 + testdata
-bash scripts/record_baseline.sh      # 记录三档 baseline
-bash scripts/gate_check.sh quick     # 精度/性能门禁
-bash scripts/compile_vllm.sh         # 重编译 vLLM + FDU 补丁
-bash launch.sh                       # 优化版服务（含 warmup）
+python3 -m unittest discover -s tests/fdu -p 'test_*.py' -v
+python3 -m py_compile \
+  scripts/build_gfx936_quant_jit.py \
+  scripts/preflight_gfx936_quant.py \
+  scripts/bench_gfx936_quant.py \
+  vllm/model_executor/layers/gfx936_online_quant.py
+bash -n launch.sh scripts/rocm_env.sh scripts/scnet_ab_gfx936.sh
 ```
 
+真实 kernel、模型加载、吞吐、SLA 和精度只能在 SCNet `gfx936` 上判断。
 
+## 安全边界
 
-### 本地 / 评测机
+- 不修改或持久化量化 Qwen3.5-27B checkpoint。
+- 不使用投机解码、剪枝、层跳过、预缓存答案或评测期下载。
+- 不修改平台锁定的 batch/scheduler、采样和 token 参数。
+- 不设置 `HSA_OVERRIDE_GFX_VERSION`，只编译和运行原生 `gfx936`。
+- JIT 产物只在 `/tmp/fdu_gfx936_quant/`，按源文件、编译器和参数哈希，进程/容器结束后可丢弃。
+- `FDU_FORCE_STOCK_GEMM=1` 可立即禁用 BF16 LLMM1；`FDU_GFX936_QUANT_MODE=off` 可立即禁用在线量化。
 
-```bash
-bash baseline/launch.sh &            # stock baseline
-bash launch.sh                       # fdu_vllm 优化版（python -m fdu_vllm.server）
-python scripts/benchmark.py --host localhost --port 8000 --output results/
-python scripts/compare.py results/baseline_xxx.json results/optimized_xxx.json
-```
+## 已放弃的活跃方向
 
+AWQ/预量化模型、bitsandbytes INT4、FP8 vendor 路径、gfx936 `wvSplitK`、AITER、KV FP8、自定义 GQA/HIP Graph 和 scheduler 调参都不是当前提交路径。原因包括规则风险、gfx936 支持不足、数值失败、实测负优化或无法隔离变量。它们只保留在 [changelog.md](changelog.md) 与历史设计文档中供复盘。
 
+## 文档入口
 
-### 项目结构（v0.2.0）
-
-```
-├── src/fdu_vllm/          # vLLM 插件入口（activate + server）
-├── patches/vllm_cscc/     # vllm_cscc 补丁
-├── scripts/
-│   ├── scnet_setup.sh     # SCNet 一键初始化
-│   ├── compile_vllm.sh    # 编译官方 vllm_cscc + 补丁
-│   ├── gate_check.sh      # 每阶段门禁
-│   └── verify_token_consistency.py
-├── launch.sh              # 评测启动（合规，无 scheduler env）
-└── docs/submit_checklist.md
-```
-
-
-
-## 评测体系
-
-| 负载档位 | 上下文长度 | 并发数 | 权重 | 场景 |
-|----------|------------|--------|------|------|
-| 4-8K | 4K–8K | 1 | 20% | 短上下文 |
-| 8-16K | 8K–16K | 1 | 50% | **主攻档** |
-| 16-32K | 16K–32K | 1 | 30% | 长上下文 |
-
-### SLA 硬性约束（违反则该档吞吐量得分清零）
-
-- **TTFT P99** ≤ Baseline TTFT P99 × 1.5
-- **TPOT P99** ≤ Baseline TPOT P99 × 1.5
-
-### 精度系数
-
-四类任务精度下降幅度 Δ 映射为系数（0~1.00），Δ ≤ 1% 时系数 = 1.00。最终得分 = 吞吐量得分 × 精度系数。
-
-## 优化技术路线
-
-### KV Cache 与显存管理
-
-- **分级块分配**：根据上下文长度（短/中/长）选择不同块大小（16/64/256 tokens），减少内碎片
-- **碎片整理**：空闲块占比超过阈值时主动整理，回收 HBM 连续空间
-- **KV FP8 量化**：写入时量化为 FP8 (E4M3)，读取时反量化，节省约 40-50% KV Cache 显存
-- **Prefix 缓存**：检测共享前缀，复用 KV 块，避免重复 prefill
-
-### Decode 阶段算子优化（HIP/DTK）
-
-- **HIP FlashAttention**：针对 DCU CDNA 架构手写 HIP C++ kernel，利用 LDS（64KB/CU）做 double buffering，MFMA 指令（16×16×16）加速矩阵乘法
-- **GQA 优化**：Qwen 的 64 Q heads / 32 KV heads = 2 queries per KV head，减少 KV 扩展开销
-- **128B HBM burst 对齐**：全局内存访问对齐到 HBM burst 边界，避免跨 burst 额外开销
-
-### 执行路径优化
-
-- **HIP Graph 捕获**：对 Decode 阶段固定 batch 路径进行图捕获，消除逐 step 的 kernel launch 开销
-- **调度批量化**：每 4-8 步调度一次，减少 Python 层开销
-- **异步 SDMA 传输**：利用 DCU 异步 DMA 引擎重叠 HBM ↔ Host 数据搬运
-- **预热**：服务初始化时运行 dummy 推理，填充 ROCm kernel 缓存
-
-## 竞赛约束
-
-| ✅ 允许 | ❌ 禁止 |
-|---------|---------|
-| 推理过程中的算子级低精度计算 | 修改模型结构、权重或推理语义 |
-| KV Cache 在线量化（非持久化） | 持久化量化、剪枝、蒸馏、微调 |
-| 自定义 HIP kernel | 预缓存答案、截断输入、跳层 |
-| vLLM 插件 / 环境变量 | 外挂辅助模型（含投机采样） |
-| 显存利用率等非锁定启动参数 | 改 max-num-seqs / max-num-batched-tokens / batch scheduler |
-
-## 团队成员
-
-- 复旦大学 — 待补充
-
-
-
-## 提交清单
-
-- [x] `launch.sh` — 服务启动脚本（Baseline + Optimized 双版本）
-- [x] `config.yaml` — 可调参数声明
-- [x] `Dockerfile` — 容器构建
-- [x] `changelog.md` — 变更日志
-- [x] `report.md` — 优化方案说明
-- [x] `docs/env_vars.md` — 环境变量说明
-- [x] `src/` — 完整源代码
-- [ ] `checksum.txt` — 权重 SHA256（待平台生成）
-
-
-
-## 参考资源
-
-- [竞赛平台](https://pra.xtnl.org.cn/)
-- [vLLM 官方文档](https://docs.vllm.ai/)
-- [ROCm HIP 编程指南](https://rocm.docs.amd.com/en/latest/reference/hip.html)
-- [DTK 软件使用说明](https://pra.xtnl.org.cn/)（竞赛平台提供）
-
+- [SCNet 最快测试流程](docs/SCNET_RUN.md)
+- [gfx936 当前状态与交接](docs/GFX936_HANDOFF.md)
+- [环境变量](docs/env_vars.md)
+- [平台提交检查清单](docs/submit_checklist.md)
+- [优化方案与实测记录](report.md)
+- [变更历史](changelog.md)

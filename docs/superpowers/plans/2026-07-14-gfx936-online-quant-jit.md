@@ -1,5 +1,10 @@
 # gfx936 Online Quantization JIT Implementation Plan
 
+> **Status (2026-07-14):** Tasks 1–7 have been implemented and merged. This
+> file is retained as implementation history; do not copy its experiment-branch
+> commands. The authoritative, failure-safe SCNet procedure is
+> `docs/SCNET_RUN.md`.
+
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
 **Goal:** Build a runtime-compiled gfx936 W8/W4 weight-only linear path that preserves BF16 prefill correctness, accelerates N=1 decode, and safely falls back to the current 66.8175-point BF16 candidate.
@@ -1834,8 +1839,7 @@ path without compiling. Otherwise keep mode `off` and stop this route.
 - [ ] **Step 2: Gate W8 first**
 
 ```bash
-bash scripts/scnet_ab_gfx936.sh quant-bench-w8 \
-  2>&1 | tee /tmp/fdu_gfx936_quant_w8.log
+bash scripts/scnet_ab_gfx936.sh quant-bench-w8
 python3 -m json.tool /tmp/fdu_gfx936_quant_w8.json >/dev/null
 ```
 
@@ -1848,8 +1852,10 @@ remain BF16 and the server must start without OOM.
 - [ ] **Step 3: Run one short highest-weight-tier test without repeating `off`**
 
 ```bash
-bash /public/home/xdzs2026_c415/vllm_cscc/scripts/scnet_ab_gfx936.sh start-candidate-w8
-cd ~/testdata && ./run_throughput.sh 8-16K 3 | tee /tmp/fdu_gfx936_w8_8_16k.log
+cd /public/home/xdzs2026_c415/vllm_cscc
+bash scripts/scnet_ab_gfx936.sh start-candidate-w8
+bash scripts/scnet_ab_gfx936.sh probe-candidate-w8
+bash scripts/scnet_ab_gfx936.sh throughput 8-16K 3 w8-fast
 ```
 
 Do not spend another server load on `off`: use the already measured dx_branch
@@ -1866,10 +1872,10 @@ score is below 90. Start the hybrid server only when both W4 MLP rows pass their
 numerical gates and each is at least 1.05x faster than its W8 row:
 
 ```bash
-bash scripts/scnet_ab_gfx936.sh quant-bench-hybrid \
-  2>&1 | tee /tmp/fdu_gfx936_quant_hybrid.log
+bash scripts/scnet_ab_gfx936.sh quant-bench-hybrid
 bash scripts/scnet_ab_gfx936.sh start-candidate-hybrid
-cd ~/testdata && ./run_throughput.sh 8-16K 3 | tee /tmp/fdu_gfx936_hybrid_8_16k.log
+bash scripts/scnet_ab_gfx936.sh probe-candidate-hybrid
+bash scripts/scnet_ab_gfx936.sh throughput 8-16K 3 hybrid-fast
 ```
 
 Advance hybrid only when both W4 shapes meet their W4 numerical limits and the
@@ -1882,10 +1888,12 @@ fallback, never silently omitted.
 Set `WINNER=w8` or `WINNER=hybrid_w4`, start that server, then run:
 
 ```bash
-cd ~/testdata
-./run_throughput.sh all 3 | tee "/tmp/fdu_gfx936_${WINNER}_all.log"
-./run_accuracy.sh hotpotqa 3 | tee "/tmp/fdu_gfx936_${WINNER}_hotpotqa.log"
-./run_accuracy.sh retrieval_multi_point 3 | tee "/tmp/fdu_gfx936_${WINNER}_retrieval.log"
+cd /public/home/xdzs2026_c415/vllm_cscc
+for tier in 8-16K 16-32K 4-8K; do
+  bash scripts/scnet_ab_gfx936.sh throughput "$tier" 3 "$WINNER-fast"
+done
+bash scripts/scnet_ab_gfx936.sh accuracy hotpotqa 3 "$WINNER-fast"
+bash scripts/scnet_ab_gfx936.sh accuracy retrieval_multi_point 3 "$WINNER-fast"
 ```
 
 Fast local gate: every throughput tier has TTFT/TPOT under 1.45x baseline, both

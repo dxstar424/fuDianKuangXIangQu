@@ -1,420 +1,111 @@
-# gfx936 BF16 原生 Kernel 路线交接文档
+# gfx936 在线量化路线交接
 
-> 更新日期：2026-07-14  
-> 目标：Qwen3.5-27B BF16 / vLLM 0.18.1 / 单 DCU（原生 `gfx936`），在不牺牲精度系数和 SLA 的前提下提升 decode 吞吐。
+> 更新：2026-07-14
+> 目标：Qwen3.5-27B BF16、vLLM 0.18.1、单张原生 `gfx936` DCU。
 
-## 1. 一页结论
+## 一页结论
 
-- 实现已推送到 GitLab 和 GitHub 的 `dx_branch`。
-- 当前实现锚点是 `91ea5e9`，交接文档提交可用 `git log -1` 查看。
-- 第一个平台可跑分锚点是 `6af6666`。
-- 当前白名单故意为空，所以代码可安全运行，但自定义 skinny GEMM **尚未真正进入模型推理**。
-- 必须先在 SCNet `gfx936` 上完成直接 kernel benchmark，由脚本生成实测 shape 白名单。
-- 未得到 SCNet 数据前，不能声称已提速，也不能声称达到 90 分。
+- `dx_branch` 的已测保底路径是原生 gfx936 + BF16 + 5 个 N=1 LLMM1 shape；平台得分 66.8175，SLA 与精度扣分均为 0。
+- 在线 W8 与 selective W4 的实现已合入主工作区，代码锚点为 `1dc9f46`；交付提交请以 `git rev-parse HEAD` 为准。
+- `FDU_GFX936_QUANT_MODE` 默认仍是 `off`。W8/W4 尚无 SCNet 端到端数据，不能声称已提速。
+- 最快验证顺序是：复用 wheel → 45 秒 JIT 门禁 → 六 shape W8 → 一次 8–16K 三样本 → 有收益才试 hybrid → 胜者短验。
+- 完整可复制命令只认 [SCNET_RUN.md](SCNET_RUN.md)。
 
-## 2. 分支与远端
+## 已测保底结果
 
-| 项目 | 值 |
-|---|---|
-| GitLab | `https://gitlab.eduxiji.net/fudiankuangxiangqu/2025pra-fdu-fudiankuangxiangqu.git` |
-| GitHub | `https://github.com/dxstar424/fuDianKuangXIangQu.git` |
-| 使用分支 | `dx_branch` |
-| 实现锚点 | `91ea5e9` |
-| 安全可跑分锚点 | `6af6666` |
-
-GitLab 在 SCNet 命令行中会询问账号/令牌，所以当前 SCNet 优先从 GitHub 的 `dx_branch` 拉取。不要把账号、密码或 token 写入日志、文档或 Git remote URL。
-
-## 3. 已完成的实现
-
-### 3.1 原生 gfx936 构建
-
-- `setup.py` 在 HIP 构建中强制生成 `vllm._rocm_C`。
-- `csrc/rocm/skinny_gemms.cu` 只将 `gfx936` 加入 BF16/FP16 GFX9 skinny kernel 编译范围。
-- `gfx936` 没有被加入全局 `_ON_GFX9` 或 `_ON_MI3XX` 判定，避免误启用其他架构专属功能。
-- 不设置 `HSA_OVERRIDE_GFX_VERSION`，不伪装成 `gfx942`。
-
-### 3.2 精确 shape 调度
-
-- `vllm/model_executor/layers/utils.py` 中的 `rocm_unquantized_gemm_impl` 增加了独立 `gfx936` 分支。
-- 仅对 BF16/FP16、无 bias、连续 weight、`K % 8 == 0`、`N in {1,2,4}` 的实测 shape 使用 `wvSplitK`。
-- 精确白名单位于 `vllm/model_executor/layers/rocm_skinny_shapes.py`。
-- 当前值为：
-
-```python
-VALIDATED_GFX936_SHAPES: frozenset[SkinnyShape] = frozenset()
-```
-
-因此当前提交会自动走 stock BF16 linear，不会调用未验证 kernel。
-
-### 3.3 模型精度与回滚
-
-- 活跃路径使用 BF16 原始权重。
-- 不使用 AWQ、INT4、FP8 权重转换、持久量化权重或投机解码。
-- `FDU_ENABLE=0`，关闭历史 FDU 插件钩子。
-- `VLLM_ROCM_USE_AITER=0`，直接 A/B 时保持单变量。
-- `FDU_FORCE_STOCK_GEMM=1` 可在不重编 wheel 的情况下立即恢复 stock linear。
-
-### 3.4 失败前置门禁
-
-`scripts/preflight_rocm.py` 在加载 27B 模型前检查：
-
-- Python、`vllm`、`vllm._C` 和 `vllm._rocm_C` 来自预期 venv；
-- 真实架构为 `gfx936`；
-- `torch.ops._rocm_C.wvSplitK` 和 `LLMM1` 存在。
-
-任一项不符合都应立即停止，不进入模型加载。
-
-## 4. 已验证的 SCNet 环境
-
-2026-07-14 在当前容器中已观察到：
-
-| 项目 | 实测值 |
-|---|---|
-| 原生架构 | `gfx936:sramecc+:xnack-` |
-| PyTorch | `2.10.0` |
-| HIP | `6.3.26093` |
-| Compute Units | `80` |
-| 持久目录 | `/public/home/xdzs2026_c415` |
-| 模型 | `/public/home/xdzs2026_c415/Qwen3.5-27B` 已存在 |
-| 评测数据 | `/public/home/xdzs2026_c415/testdata` 已存在 |
-
-### 当前已知阻塞
-
-SCNet 系统 Python 最初缺少 `ensurepip/python3.10-venv`，旧版 `init` 因此导致：
-
-1. `vllm_baseline` 虚拟环境创建失败；
-2. 后续 `setup.py` 使用残缺 venv，报 `ModuleNotFoundError: torch`；
-3. preflight 继而报 `vllm._C` / `_rocm_C` / architecture 全部缺失。
-
-这些是同一个 venv 初始化失败引起的连锁错误，**不是 kernel benchmark 失败**。修复后的 `init` 使用 `--without-pip --system-site-packages`，不再依赖 ensurepip，并会立即验证继承的 `pip` 和 `torch`。
-
-## 5. 从当前状态继续：可复制命令
-
-### 5.1 拉取 GitHub `dx_branch`
-
-```bash
-export ROOT=/public/home/xdzs2026_c415
-export EXP=$ROOT/experiments/gfx936_skinny
-
-mkdir -p "$EXP" "$ROOT/results/gfx936_skinny"
-cd "$EXP"
-
-# 仅在 source 是前一次未完成 clone 时执行。改名保留，不直接删除。
-if [ -e source ] && [ ! -d source/.git ]; then
-  mv source "source.incomplete.$(date +%s)"
-fi
-
-if [ -d source/.git ]; then
-  cd source
-  git fetch origin dx_branch
-  git checkout dx_branch
-  git merge --ff-only origin/dx_branch
-else
-  git clone --depth 1 --branch dx_branch \
-    https://github.com/dxstar424/fuDianKuangXIangQu.git source
-  cd source
-fi
-
-git rev-parse --short HEAD
-```
-
-实现锚点应至少为 `91ea5e9`；交接文档合入后可能是更新的提交。
-
-### 5.2 清理旧版创建失败的 venv
-
-先拉取包含 `--without-pip` 修复的最新 `dx_branch`。不需要安装 `python3.10-venv`。清理的只是之前创建失败的两个 venv：
-
-```bash
-rm -rf \
-  /public/home/xdzs2026_c415/venvs/vllm_baseline \
-  /public/home/xdzs2026_c415/venvs/vllm_gfx936
-```
-
-### 5.3 初始化、检查 torch、构建 control
-
-用 `&&` 确保前一步失败时不会继续：
-
-```bash
-cd /public/home/xdzs2026_c415/experiments/gfx936_skinny/source
-
-bash scripts/scnet_ab_gfx936.sh init && \
-/public/home/xdzs2026_c415/venvs/vllm_baseline/bin/python -c \
-'import torch; p=torch.cuda.get_device_properties(0); print(torch.__version__, torch.version.hip, p.gcnArchName, p.multi_processor_count)' && \
-bash scripts/scnet_ab_gfx936.sh build-control
-```
-
-预期中间检查包含：
-
-```text
-2.10.0 6.3.26093 gfx936:sramecc+:xnack- 80
-```
-
-control wheel 构建成功后查看 hash：
-
-```bash
-cat /public/home/xdzs2026_c415/results/gfx936_skinny/wheels/control/SHA256SUMS
-```
-
-### 5.4 直接 kernel 门禁
-
-```bash
-cd /public/home/xdzs2026_c415/experiments/gfx936_skinny/source
-bash scripts/scnet_ab_gfx936.sh bench
-echo "bench_exit=$?"
-```
-
-结果文件：
-
-```text
-/public/home/xdzs2026_c415/results/gfx936_skinny/microbench.json
-```
-
-摘要命令：
-
-```bash
-python3 - <<'PY'
-import json
-from pathlib import Path
-
-p = Path("/public/home/xdzs2026_c415/results/gfx936_skinny/microbench.json")
-d = json.loads(p.read_text())
-print("arch:", d.get("arch"))
-print("passed:", d.get("passed"))
-print("projected:", d.get("projected_linear_speedup"))
-print("fatal_error:", d.get("fatal_error"))
-for row in d.get("rows", []):
-    print(
-        row.get("n"), row.get("family"),
-        "speedup=", row.get("speedup"),
-        "stock_p99=", row.get("stock_p99_ms"),
-        "candidate_p99=", row.get("candidate_p99_ms"),
-        "admitted=", row.get("admitted"),
-        "error=", row.get("error"),
-    )
-PY
-```
-
-## 6. 直接 kernel 决策门禁
-
-benchmark 会覆盖 Qwen3.5-27B 的 6 类主要 linear，每类测 `N=1/2/4`，共 18 行：
-
-1. `gdn_qkvz`
-2. `gdn_ba`
-3. `full_attention_qkv_gate`
-4. `attention_output`
-5. `mlp_gate_up`
-6. `mlp_down`
-
-每行必须同时满足：
-
-| 门禁 | 阈值 |
+| 指标 | 平台实测 |
 |---|---:|
-| 输出有限 | `finite=True` |
-| PyTorch close | `rtol=0.03, atol=0.5` |
-| 余弦相似度 | `>= 0.999` |
-| 相对 L2 | `<= 0.01` |
-| 中位加速 | `>= 1.15` |
-| P99 | candidate `<=` stock |
+| 4–8K 吞吐 | 15.03 tok/s |
+| 8–16K 吞吐 | 12.00 tok/s |
+| 16–32K 吞吐 | 6.09 tok/s |
+| SLA 扣分 | 0 |
+| 精度扣分 | 0 |
+| 最终得分 | 66.8175 |
 
-全局还必须满足：
+`vllm/model_executor/layers/rocm_skinny_shapes.py` 中有五个 SCNet 已验证 BF16 shape。`(N=1, M=5120, K=17408)` 的旧 LLMM1 数值测试失败，因此保底模式对它使用 stock BF16 linear。
 
-- 18 行全部通过；
-- N=1、2、4 的主导 linear 总延迟投影加速均 `>= 1.6`。
+## 当前候选设计
 
-### 通过：`bench_exit=0`
+| 模式 | Decode `N=1` | Prefill/其他 N | 失败处理 |
+|---|---|---|---|
+| `off` | 已测 BF16 LLMM1/stock | BF16 | 保底 |
+| `w8` | 六类精确 shape 逐项尝试 W8A16 HIP GEMV | 临时还原 BF16 后走现有 linear | 逐 shape 回退 BF16 |
+| `hybrid_w4` | 两个 MLP shape 先尝试 group-32 W4，其他尝试 W8 | 临时还原 BF16 | W4 → W8 → BF16 |
 
-脚本会原子写入白名单。继续：
-
-```bash
-cd /public/home/xdzs2026_c415/experiments/gfx936_skinny/source
-git diff -- vllm/model_executor/layers/rocm_skinny_shapes.py
-python3 -m unittest discover -s tests/fdu -p 'test_*.py' -v
-
-git add vllm/model_executor/layers/rocm_skinny_shapes.py
-git commit -m "perf: admit measured gfx936 skinny shapes"
-
-# 当前 origin 为 GitHub。
-git push origin HEAD:dx_branch
-
-bash scripts/scnet_ab_gfx936.sh build-candidate
-cat /public/home/xdzs2026_c415/results/gfx936_skinny/wheels/candidate/SHA256SUMS
-```
-
-### 失败：`bench_exit=2`
-
-- 不构建性能 candidate；
-- 不加载 27B 模型；
-- 保留 `microbench.json` 和日志；
-- 后续诊断服务强制设置：
-
-```bash
-export FDU_FORCE_STOCK_GEMM=1
-```
-
-## 7. candidate 通过后的模型 A/B
-
-### 7.1 同 wheel stock/candidate 探针
-
-```bash
-cd /public/home/xdzs2026_c415/experiments/gfx936_skinny/source
-
-bash scripts/scnet_ab_gfx936.sh start-candidate-stock
-bash scripts/scnet_ab_gfx936.sh probe candidate-stock
-bash scripts/scnet_ab_gfx936.sh stop
-
-bash scripts/scnet_ab_gfx936.sh start-candidate
-bash scripts/scnet_ab_gfx936.sh probe candidate
-bash scripts/scnet_ab_gfx936.sh stop
-```
-
-检查回答一致：
-
-```bash
-/public/home/xdzs2026_c415/venvs/vllm_gfx936/bin/python - <<'PY'
-import json
-from pathlib import Path
-
-root = Path("/public/home/xdzs2026_c415/results/gfx936_skinny/probes")
-stock = json.loads((root / "candidate-stock.json").read_text())
-candidate = json.loads((root / "candidate.json").read_text())
-assert stock["prompts"] == candidate["prompts"]
-assert stock["responses"] == candidate["responses"]
-print("token-consistency smoke passed")
-PY
-```
-
-出现 import error、illegal instruction、GPU fault、OOM、超时或回答不一致，立即拒绝 candidate。
-
-### 7.2 两轮三档吞吐
-
-按得分权重优先测 8–16K，再测 16–32K 和 4–8K：
-
-```bash
-for round in 1 2; do
-  for mode in control candidate; do
-    bash scripts/scnet_ab_gfx936.sh "start-$mode"
-    for tier in 8-16K 16-32K 4-8K; do
-      bash scripts/scnet_ab_gfx936.sh throughput "$tier" 10 "$mode-r$round"
-    done
-    bash scripts/scnet_ab_gfx936.sh stop
-  done
-done
-```
-
-继续门禁：
-
-- candidate 8–16K 吞吐中位数相对 control 至少提升 50%；
-- 其他两档不回退；
-- TTFT P99 不超过 control 的 1.5x；
-- TPOT P99 不超过 control 的 1.5x；
-- 无失败请求。
-
-### 7.3 四项精度
-
-```bash
-for mode in control candidate; do
-  bash scripts/scnet_ab_gfx936.sh "start-$mode"
-  for task in hotpotqa gov_report retrieval_multi_point aggregation_keyword_aggregation; do
-    bash scripts/scnet_ab_gfx936.sh accuracy "$task" 10 "$mode-accuracy"
-  done
-  bash scripts/scnet_ab_gfx936.sh stop
-done
-```
-
-任一任务降低超过 1% 都拒绝 candidate。本 BF16 路线不接受精度系数小于 1.0 作为正常结果。
-
-### 7.4 复现投影分数
-
-```bash
-/public/home/xdzs2026_c415/venvs/vllm_gfx936/bin/python \
-  scripts/score_gfx936.py \
-  --results-root /public/home/xdzs2026_c415/results/gfx936_skinny \
-  --control-run control-r1 --control-run control-r2 \
-  --candidate-run candidate-r1 --candidate-run candidate-r2 \
-  --accuracy-coefficient 1.0 \
-  --output /public/home/xdzs2026_c415/results/gfx936_skinny/score.json
-```
-
-## 8. 跑分与提交决策
-
-### 现在直接提交 `91ea5e9`
-
-- 可以启动；
-- preflight 会检查真实 `gfx936` 和安装 wheel；
-- 由于白名单为空，linear 实际使用 stock BF16；
-- 适合做安全基准，不应预期明显性能提升。
-
-### 目标是冲 90
-
-必须至少完成：
+候选 shape 为：
 
 ```text
-control wheel
-  -> 18-row direct kernel gate
-  -> generated whitelist
-  -> candidate wheel
-  -> stock/candidate response consistency
-  -> two-run three-tier throughput
-  -> SLA
-  -> four accuracy tasks
-  -> reproduced score
+(16384, 5120)  (96, 5120)  (14336, 5120)
+(5120, 6144)   (34816, 5120)  (5120, 17408)
 ```
 
-任一门禁失败，不能因为目标分数高就强行提交。
+`scripts/build_gfx936_quant_jit.py` 将不依赖 Torch C++ 头文件的小型 HIP 源码编译到 `/tmp/fdu_gfx936_quant/<hash>.so`，超时为 45 秒。packed weight 与 scale 只存在当前推理进程的显存中，不写 checkpoint、模型目录或持久缓存。
 
-## 9. 紧急回滚
+## 关键安全合同
 
-运行时回滚：
+1. 只接受真实 `gfx936`；`scripts/rocm_env.sh` 主动取消 `HSA_OVERRIDE_GFX_VERSION`。
+2. 启动仍固定 `--dtype bfloat16`，checkpoint 不转换、不替换。
+3. JIT、ABI 或 GPU smoke 失败时 `launch.sh` 回退 `off`。
+4. `scripts/scnet_ab_gfx936.sh` 要求服务日志声明的模式与请求模式完全一致；如果日志包含 `keeping BF16 path`，即使 `/health` 成功也判候选失败并停止进程。
+5. 首个真实 layer 对每个 `(M,K,kind)` 做数值与速度门禁，之后才复用决策；未通过的 layer 保留原 BF16 parameter。
+6. benchmark JSON 记录原仓库精确 40 位提交号和 HIP 源文件 SHA-256；实验副本不含 `.git` 也不会丢失 provenance。
+7. `FDU_GFX936_QUANT_MODE=off` 无需重编即可回到 66.8175 路径；`FDU_FORCE_STOCK_GEMM=1` 可进一步禁用 BF16 LLMM1。
 
-```bash
-export FDU_FORCE_STOCK_GEMM=1
-bash scripts/scnet_start_optimized.sh
-```
+## 实现地图
 
-如果平台环境不是实测的原生 `gfx936`，应让 preflight 失败或使用 stock 回滚，不得恢复架构伪装。
-
-## 10. 重要文件地图
-
-| 文件 | 作用 |
+| 文件 | 责任 |
 |---|---|
-| `setup.py` | 请求构建 `vllm._rocm_C` |
-| `csrc/rocm/skinny_gemms.cu` | gfx936 HIP skinny kernels |
-| `vllm/platforms/rocm_capabilities.py` | 狭义架构能力判定 |
-| `vllm/model_executor/layers/rocm_skinny_policy.py` | 纯 Python shape 门禁 |
-| `vllm/model_executor/layers/rocm_skinny_shapes.py` | SCNet 生成的精确白名单 |
-| `vllm/model_executor/layers/utils.py` | stock/custom GEMM 实际调度 |
-| `scripts/preflight_rocm.py` | 模型加载前环境/扩展门禁 |
-| `scripts/bench_gfx936_skinny.py` | 18 行直接 kernel benchmark 和白名单生成 |
-| `scripts/scnet_ab_gfx936.sh` | 隔离 venv、wheel、服务和官方评测 A/B |
-| `scripts/probe_gfx936.py` | 固定三问顺序 smoke probe |
-| `scripts/score_gfx936.py` | 按官方曲线复现投影分数 |
-| `launch.sh` | 平台 BF16 启动入口 |
-| `scripts/rocm_env.sh` | 保守 ROCm 环境与缓存目录 |
-| `docs/SCNET_RUN.md` | 精简 SCNet 操作手册 |
+| `csrc/fdu/gfx936_quant_gemv.hip` | W8/W4 GEMV 与 BF16 重构 C ABI |
+| `scripts/build_gfx936_quant_jit.py` | 45 秒超时、哈希、原子 `/tmp` JIT 缓存 |
+| `scripts/preflight_gfx936_quant.py` | 四符号 ABI 与小 shape GPU smoke |
+| `scripts/bench_gfx936_quant.py` | 六 shape 正确性、速度、显存和 provenance JSON |
+| `vllm/model_executor/layers/gfx936_online_quant.py` | mode/shape policy、packing、admission、ctypes runtime |
+| `vllm/model_executor/layers/linear.py` | load 后在线转换与 apply 分派 |
+| `vllm/model_executor/layers/utils.py` | opaque Torch custom op 和 BF16 LLMM1 fallback |
+| `vllm/model_executor/model_loader/utils.py` | 转换完成后释放 allocator cache |
+| `launch.sh` | JIT/preflight/fail-open 启动合同 |
+| `scripts/scnet_ab_gfx936.sh` | 可复现的 off/W8/hybrid 服务与评测 wrapper |
 
-## 11. 本地验证状态
+## SCNet 快速决策
 
-`91ea5e9` 前已完成：
+先执行 [SCNET_RUN.md](SCNET_RUN.md) 的 0–4 节。W8 六 shape 全通过最理想；为了快速筛选，至少要求两个 MLP shape 和另外两个 shape 通过，其他 shape 必须明确保持 BF16。
 
-- `tests/fdu` 共 74 个测试通过；
-- `launch.sh`、`rocm_env.sh`、`scnet_start_optimized.sh`、`scnet_ab_gfx936.sh` 通过 `bash -n`；
-- Python 脚本通过 `compileall`；
-- 活跃路径无 AWQ/INT4/FP8 权重转换命令；
-- 无 `HSA_OVERRIDE_GFX_VERSION=` 或 `ROCBLAS_LAYER=` 导出。
+W8 的第一轮端到端门槛：
 
-本地 macOS 没有 DCU，所以尚未完成的唯一关键事实是：**SCNet 上的实际 kernel 正确性和加速数据**。
+- 8–16K 三样本吞吐 `>= 12.60 tok/s`；
+- TTFT/TPOT P99 均 `< baseline × 1.45`；
+- 无 OOM、Traceback、非有限指标或静默回退；
+- 生成成功的服务 probe。
 
-## 12. 接手人的第一个动作
+只有 W8 有净收益时才测 hybrid。hybrid 需要两个 MLP W4 行通过 W4 数值门禁、各自比 W8 microbenchmark 快至少 1.05x，并且 8–16K 端到端再提高至少 3%。
 
-不要直接启动 27B 模型。先执行：
+最终候选再跑三档各 3 条，以及 HotpotQA、Retrieval MultiPoint 各 3 条。选项只有：
 
-```bash
-rm -rf /public/home/xdzs2026_c415/venvs/vllm_baseline \
-       /public/home/xdzs2026_c415/venvs/vllm_gfx936
-cd /public/home/xdzs2026_c415/experiments/gfx936_skinny/source
-bash scripts/scnet_ab_gfx936.sh init
-bash scripts/scnet_ab_gfx936.sh build-control
-bash scripts/scnet_ab_gfx936.sh bench
+```text
+hybrid_w4 明确胜出 -> 选 hybrid_w4
+否则 w8 通过       -> 选 w8
+否则               -> 保持 off
 ```
 
-然后只根据 `microbench.json` 决定是否继续。
+在完成以上证据前，不修改 Dockerfile 与 `scripts/rocm_env.sh` 的默认 `off`。
+
+## 需要带回的证据
+
+- `/tmp/fdu_gfx936_quant_compile.log`
+- `/tmp/fdu_gfx936_quant_w8.json`
+- `/tmp/fdu_gfx936_quant_w8.log`
+- `/tmp/fdu_gfx936_w8.log`
+- `results/gfx936_skinny/throughput/w8-fast/8-16K.json`
+- 若测 hybrid，再带回 hybrid JSON、服务日志和 8–16K result JSON
+
+JSON 中必须能看到 `git_commit`、`hip_source_sha256`、设备/ROCm 信息、每个 shape 的 kind、NRMSE、cosine、BF16/candidate latency、speedup、峰值显存与 admission 原因。
+
+## 历史 no-go
+
+- `wvSplitK`：gfx936 直接 benchmark 未通过，当前不再扩展；BF16 保底用已测 LLMM1。
+- AWQ/预量化模型、bitsandbytes、持久 INT4/FP8：不属于当前路径，存在规则或 gfx936 kernel 风险。
+- vendor FP8 / `torch._scaled_mm`：本设备类没有已证明可用的稳定快路径。
+- AITER、KV FP8、旧 GQA/HIP Graph、scheduler 调参：未证明净收益且会污染本轮单变量判断。
+- 历史 `fdu_vllm/` 插件链：当前 `FDU_ENABLE=0`，不作为平台激活机制。
+
+旧实验仍保留在 `changelog.md` 和 `docs/superpowers/` 供复盘，但不应再用于 SCNet 操作。
