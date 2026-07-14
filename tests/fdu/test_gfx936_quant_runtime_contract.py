@@ -86,6 +86,41 @@ class Gfx936QuantRuntimeContractTest(unittest.TestCase):
             self.assertEqual(len(fake.fdu_gfx936_w8a16_gemv.argtypes), 7)
             self.assertEqual(len(fake.fdu_gfx936_w8_dequant.argtypes), 6)
 
+    def test_missing_abi_symbol_is_reported_as_runtime_error(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            library_path = Path(directory) / "kernel.so"
+            library_path.write_bytes(b"fixture")
+            fake = _Library()
+            del fake.fdu_gfx936_w4_dequant
+            with mock.patch.object(self.quant.ctypes, "CDLL", return_value=fake):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"missing required ABI symbol.*fdu_gfx936_w4_dequant",
+                ):
+                    self.quant.load_kernel_library(library_path)
+
+    def test_signature_binding_error_identifies_abi_symbol(self) -> None:
+        with tempfile.TemporaryDirectory() as directory:
+            library_path = Path(directory) / "kernel.so"
+            library_path.write_bytes(b"fixture")
+            fake = _Library()
+            fake.fdu_gfx936_w8a16_gemv = object()
+            with mock.patch.object(self.quant.ctypes, "CDLL", return_value=fake):
+                with self.assertRaisesRegex(
+                    RuntimeError,
+                    r"failed to bind.*fdu_gfx936_w8a16_gemv",
+                ):
+                    self.quant.load_kernel_library(library_path)
+
+    def test_kernel_argument_error_is_normalized_for_runtime_fallback(self) -> None:
+        def reject_arguments(*args):
+            raise self.quant.ctypes.ArgumentError("bad pointer")
+
+        with self.assertRaisesRegex(
+            RuntimeError, r"w8_gemv ABI invocation failed.*bad pointer"
+        ):
+            self.quant._call_kernel(reject_arguments, "w8_gemv")
+
     def test_missing_library_fails_without_loading_torch(self) -> None:
         with mock.patch.dict(os.environ, {}, clear=True):
             with self.assertRaises(FileNotFoundError):

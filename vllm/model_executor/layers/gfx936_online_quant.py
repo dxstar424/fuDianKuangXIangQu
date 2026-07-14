@@ -95,13 +95,23 @@ def load_kernel_library(path: str | Path | None = None) -> LoadedKernels:
     integer = ctypes.c_int
     gemv_args = [pointer, pointer, pointer, pointer, integer, integer, pointer]
     dequant_args = [pointer, pointer, pointer, integer, integer, pointer]
-    functions = [getattr(library, name) for name in REQUIRED_SYMBOLS]
-    functions[0].argtypes = gemv_args
-    functions[1].argtypes = gemv_args
-    functions[2].argtypes = dequant_args
-    functions[3].argtypes = dequant_args
-    for function in functions:
-        function.restype = integer
+    functions = []
+    for name in REQUIRED_SYMBOLS:
+        try:
+            functions.append(getattr(library, name))
+        except AttributeError as error:
+            raise RuntimeError(
+                f"gfx936 quant library missing required ABI symbol: {name}"
+            ) from error
+    signatures = (gemv_args, gemv_args, dequant_args, dequant_args)
+    for name, function, arguments in zip(REQUIRED_SYMBOLS, functions, signatures):
+        try:
+            function.argtypes = arguments
+            function.restype = integer
+        except (AttributeError, TypeError, ValueError, ctypes.ArgumentError) as error:
+            raise RuntimeError(
+                f"failed to bind gfx936 quant ABI symbol {name}: {error}"
+            ) from error
     loaded = LoadedKernels(library, *functions)
     if path is None:
         _LOADED_KERNELS = loaded
@@ -116,6 +126,13 @@ def _stream_pointer() -> ctypes.c_void_p:
     import torch
 
     return ctypes.c_void_p(torch.cuda.current_stream().cuda_stream)
+
+
+def _call_kernel(function, operation: str, *args):
+    try:
+        return function(*args)
+    except ctypes.ArgumentError as error:
+        raise RuntimeError(f"{operation} ABI invocation failed: {error}") from error
 
 
 def _check_status(status: int, operation: str) -> None:
@@ -177,7 +194,10 @@ def _dequantize_weight(packed, scale, kind: int, m: int, k: int):
     output = torch.empty((m, k), dtype=torch.bfloat16, device=packed.device)
     kernels = load_kernel_library()
     function = kernels.w4_dequant if kind == KIND_W4 else kernels.w8_dequant
-    status = function(
+    operation = "w4_dequant" if kind == KIND_W4 else "w8_dequant"
+    status = _call_kernel(
+        function,
+        operation,
         _pointer(packed),
         _pointer(scale),
         _pointer(output),
@@ -185,7 +205,7 @@ def _dequantize_weight(packed, scale, kind: int, m: int, k: int):
         k,
         _stream_pointer(),
     )
-    _check_status(status, "w4_dequant" if kind == KIND_W4 else "w8_dequant")
+    _check_status(status, operation)
     return output
 
 
@@ -239,7 +259,10 @@ def run_quant_gemv(x, packed, scale, kind: int, m: int, k: int):
     output = torch.empty((1, m), dtype=torch.bfloat16, device=x.device)
     kernels = load_kernel_library()
     function = kernels.w4_gemv if kind == KIND_W4 else kernels.w8_gemv
-    status = function(
+    operation = "w4_gemv" if kind == KIND_W4 else "w8_gemv"
+    status = _call_kernel(
+        function,
+        operation,
         _pointer(packed),
         _pointer(scale),
         _pointer(flattened),
@@ -248,7 +271,7 @@ def run_quant_gemv(x, packed, scale, kind: int, m: int, k: int):
         k,
         _stream_pointer(),
     )
-    _check_status(status, "w4_gemv" if kind == KIND_W4 else "w8_gemv")
+    _check_status(status, operation)
     return output.reshape(*x.shape[:-1], m)
 
 
