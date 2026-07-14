@@ -40,6 +40,7 @@ class NoActiveQuantizationTest(unittest.TestCase):
         self.assertIn("gfx936", env_doc)
         self.assertIn("BF16", env_doc)
         self.assertIn("FDU_FORCE_STOCK_GEMM", env_doc)
+        self.assertIn("ENABLE_PREFIX_CACHING", env_doc)
         self.assertIn("dx_branch", run_doc)
         self.assertIn("scnet_ab_gfx936.sh", run_doc)
         self.assertNotIn("HSA_OVERRIDE_GFX_VERSION=", env_doc)
@@ -57,6 +58,9 @@ class NoActiveQuantizationTest(unittest.TestCase):
         self.assertIn("默认", env_doc)
         self.assertIn("`w8`", env_doc)
         self.assertIn("`off`", env_doc)
+        self.assertIn("--disable-log-stats", env_doc)
+        self.assertIn("lutinayi_branch", handoff)
+        self.assertIn("metadata-only", handoff)
         self.assertNotIn("src/fdu_vllm/                   # vLLM 插件入口（主要改动区）", readme)
 
     def test_report_and_changelog_mark_old_routes_historical(self) -> None:

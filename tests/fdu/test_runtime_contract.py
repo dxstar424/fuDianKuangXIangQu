@@ -54,6 +54,12 @@ class RuntimeContractTest(unittest.TestCase):
         self.assertNotIn("quant_force", text)
         self.assertNotIn("--max-num-seqs", text)
         self.assertNotIn("--max-num-batched-tokens", text)
+        self.assertIn("--disable-log-stats", text)
+        self.assertRegex(
+            text,
+            r'if\s+_is_true\s+"\$\{ENABLE_PREFIX_CACHING:-1\}";\s+then'
+            r'[\s\S]*VLLM_ARGS\+=\(--enable-prefix-caching\)',
+        )
 
     def test_launch_truth_parser_is_portable_to_bash_3(self) -> None:
         text = _read(LAUNCH)
@@ -68,6 +74,7 @@ class RuntimeContractTest(unittest.TestCase):
             "VLLM_ROCM_USE_SKINNY_GEMM": "1",
             "FDU_FORCE_STOCK_GEMM": "0",
             "FDU_GFX936_QUANT_MODE": "w8",
+            "ENABLE_PREFIX_CACHING": "1",
         }
         for name, default in expected_defaults.items():
             with self.subTest(name=name):
@@ -135,6 +142,7 @@ class RuntimeContractTest(unittest.TestCase):
         )
         self.assertNotIn("vllm.__file__", text)
         self.assertNotIn("FDU hook appended", text)
+        self.assertRegex(text, r"(?m)^ENV\s+ENABLE_PREFIX_CACHING=1\s*$")
 
     def test_scnet_helper_selects_installed_venv_interpreter(self) -> None:
         text = _read(SCNET_START)

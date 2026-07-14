@@ -26,6 +26,7 @@ git diff --check
 - [ ] 全部测试通过。
 - [ ] 活跃启动文件没有 AWQ、bitsandbytes、`--quantization` 或架构伪装。
 - [ ] `FDU_ENABLE=0`、`VLLM_ROCM_USE_AITER=0`。
+- [ ] `ENABLE_PREFIX_CACHING=1`、`--disable-log-stats` 生效，且没有 `--max-num-seqs`、`--max-num-batched-tokens` 或自定义 scheduler 参数。
 
 ## SCNet 门禁
 
@@ -44,6 +45,7 @@ git diff --check
 - [ ] hybrid 只有在两个 MLP W4 数值通过、各自比 W8 microbenchmark `>=1.05x`，并且端到端 8–16K 比 W8 `>=1.03x` 时才可选。
 - [ ] 否则 W8 只有在 8–16K `>=12.60 tok/s`、三档/SLA/精度通过且加权投影高于 66.8175 时才可选。
 - [ ] 盲测提交将 `scripts/rocm_env.sh` 和 Dockerfile 同步设为 `FDU_GFX936_QUANT_MODE=w8`；回滚提交恢复 `off`。
+- [ ] 如需隔离 prefix cache，只设 `ENABLE_PREFIX_CACHING=0`，不要引入历史自定义 KV allocator。
 - [ ] 如果修改默认模式，同一提交同步更新 `docs/env_vars.md`、`docs/GFX936_HANDOFF.md`、`report.md` 和 `changelog.md`。
 
 ## 平台结果

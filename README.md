@@ -9,6 +9,7 @@
 ```text
 原始 BF16 checkpoint
   -> 原生 gfx936 wheel
+  -> vLLM 原生 prefix caching + 关闭请求/统计日志
   -> FDU_GFX936_QUANT_MODE=w8
        -> 5 个 SCNet microbenchmark 已接纳 shape 使用 W8A16 JIT GEMV
        -> (5120, 17408) 自动拒绝并保留 stock BF16 linear
@@ -41,6 +42,8 @@
 W8 六 shape microbenchmark 已得到 5 个接纳、1 个拒绝；接纳项相对当前 BF16/LLMM1 为 `1.19x–1.53x`，`(5120,17408)` 仅 `0.505x`，因此明确保持 BF16。按本轮“停止 SCNet、直接平台盲测”的决策，默认改为选择性 `w8`；尚无端到端吞吐、SLA 或精度结论，不能把 microbenchmark 写成平台提分。
 
 Decode 执行路径另加 KV block table 脏提交：只有新增、移动或交换 KV block 时才把 CPU block table 复制到 GPU。默认 block size 为 16，稳定单请求 decode 通常可跳过约 15/16 次重复 H2D；不改变 KV 内容、块大小、Attention 数值或分配策略。该项只有静态/状态机测试，平台收益仍待跑分。
+
+对 `lutinayi_branch@5fec801` 与 `wyb@f7dac25` 的实现和记录审计后，本轮只借鉴前者使用的 vLLM 原生 prefix caching 与 `--disable-log-stats`。prefix cache 默认开启但可由 `ENABLE_PREFIX_CACHING=0` 独立关闭；两项都不改变模型数值。两个分支的自定义 Attention、KV FP8、metadata-only allocator/defrag、Graph、scheduler 参数及长 warmup均不合入，详细证据见交接文档。
 
 ## 关键实现
 
@@ -90,7 +93,7 @@ bash -n launch.sh scripts/rocm_env.sh scripts/scnet_ab_gfx936.sh
 - 不修改平台锁定的 batch/scheduler、采样和 token 参数。
 - 不设置 `HSA_OVERRIDE_GFX_VERSION`，只编译和运行原生 `gfx936`。
 - JIT 产物只在 `/tmp/fdu_gfx936_quant/`，按源文件、编译器和参数哈希，进程/容器结束后可丢弃。
-- `FDU_FORCE_STOCK_GEMM=1` 可立即禁用 BF16 LLMM1；`FDU_GFX936_QUANT_MODE=off` 可立即禁用在线量化。
+- `FDU_FORCE_STOCK_GEMM=1` 可立即禁用 BF16 LLMM1；`FDU_GFX936_QUANT_MODE=off` 可立即禁用在线量化；`ENABLE_PREFIX_CACHING=0` 可独立禁用 prefix cache。
 
 ## 已放弃的活跃方向
 

@@ -104,7 +104,12 @@ VLLM_ARGS=(
     --served-model-name Qwen3.5-27B
     --load-format auto
     --no-enable-log-requests
+    --disable-log-stats
 )
+
+if _is_true "${ENABLE_PREFIX_CACHING:-1}"; then
+    VLLM_ARGS+=(--enable-prefix-caching)
+fi
 
 exec "$PYTHON_BIN" -m vllm.entrypoints.openai.api_server \
     "${VLLM_ARGS[@]}" "$@"

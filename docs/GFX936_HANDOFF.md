@@ -1,15 +1,36 @@
-# gfx936 在线量化路线交接
+# dx_branch gfx936 平台交接
 
 > 更新：2026-07-14
-> 目标：Qwen3.5-27B BF16、vLLM 0.18.1、单张原生 `gfx936` DCU。
+>
+> 分支：`dx_branch`
+>
+> 本轮分支审计前代码锚点：`8b31f18a793dda9b6b9067a305975207b767c52e`
+>
+> 最终交付提交以 `git rev-parse HEAD` 以及远端 `dx_branch` / GitHub `main` 为准。
 
 ## 一页结论
 
-- `dx_branch` 已记录平台得分 66.8175，SLA 与精度扣分均为 0；评测提交 hash 尚未随结果记录。若对应 `88b7d10` 或其后继，则包含原生 gfx936 + BF16 + 5 个 N=1 LLMM1 shape，但不能量化 LLMM1 的独立贡献。
-- 在线 W8 与 selective W4 的实现已合入主工作区，代码锚点为 `1dc9f46`；交付提交请以 `git rev-parse HEAD` 为准。
-- `FDU_GFX936_QUANT_MODE` 默认改为选择性 `w8`，用于本次无额外 SCNet 的平台盲测；五个 shape 已通过 microbenchmark，`(5120,17408)` 自动拒绝。W8 仍无端到端数据，不能声称已提分。
-- 最快验证顺序是：复用 wheel → 45 秒 JIT 门禁 → 六 shape W8 → 一次 8–16K 三样本 → 有收益才试 hybrid → 胜者短验。
-- 完整可复制命令只认 [SCNET_RUN.md](SCNET_RUN.md)。
+- 已记录的安全参照仍是 **66.8175 分**：4–8K / 8–16K / 16–32K 分别为 `15.03 / 12.00 / 6.09 tok/s`，SLA 与精度扣分均为 0。评测提交 hash 尚未随结果记录，不能把全部增益独立归因于 LLMM1。
+- 当前平台候选默认使用 `FDU_GFX936_QUANT_MODE=w8`：五个已通过 gfx936 microbenchmark 的精确 shape 使用 W8A16 JIT GEMV，`(5120,17408)` 因只有 `0.505x` 自动保留 stock BF16。
+- Decode 侧保留 BF16 LLMM1/stock 回退，并增加 KV block table 脏提交；本轮再借鉴 `lutinayi_branch` 的两个低风险点：vLLM 原生 prefix caching（默认开启，可用 `ENABLE_PREFIX_CACHING=0` 关闭）和 `--disable-log-stats`。
+- **不合入**两个分支的自定义 Attention、KV FP8、分层 allocator、defrag、HIP Graph、scheduler 参数和长 warmup。它们要么未接入真实执行链，要么已有负优化/无收益证据，要么会扩大本次平台盲测风险。
+- 不再追加 SCNet 测试。基于已有 shape microbenchmark 的主观平台预估为 **70–74 分，中位约 71 分**；这不是实测保证，W8 的端到端 TTFT、TPOT、长档吞吐和四项精度仍由平台决定。
+
+## 当前提交实际生效的路径
+
+```text
+原始 Qwen3.5-27B BF16 checkpoint
+  -> 原生 gfx936 wheel
+  -> native vLLM prefix caching（默认开，可回滚）
+  -> quiet request/stat logging
+  -> FDU_GFX936_QUANT_MODE=w8
+       -> 5 个接纳 shape: W8A16 N=1 JIT GEMV
+       -> (5120,17408): stock BF16
+       -> JIT / ABI / smoke / admission 失败: BF16 LLMM1 或 stock
+  -> KV block table 仅 dirty 时 H2D
+```
+
+没有设置平台锁定的 `--max-num-seqs`、`--max-num-batched-tokens` 或自定义 scheduler 参数。默认 block size 仍由 vLLM 保持为 16，不修改 Attention 数值或 KV 物理布局。
 
 ## 已记录的保底参照
 
@@ -20,95 +41,93 @@
 | 16–32K 吞吐 | 6.09 tok/s |
 | SLA 扣分 | 0 |
 | 精度扣分 | 0 |
-| 最终得分 | 66.8175 |
+| 最终得分 | **66.8175** |
 
-该结果可用于本轮快速候选的方向比较。由于缺少平台评测 commit 与同环境 stock/LLMM1 A/B，不能把 66.8175 或相对旧结果的差值独立归因于 LLMM1。
+如果该结果对应 `88b7d10` 或其后继，则包含原生 gfx936 + BF16 + 五个 N=1 LLMM1 shape；由于缺少精确提交和同环境 stock A/B，只把它当回滚参照。
 
-`vllm/model_executor/layers/rocm_skinny_shapes.py` 中有五个 SCNet 已验证 BF16 shape。`(N=1, M=5120, K=17408)` 的旧 LLMM1 数值测试失败，因此保底模式对它使用 stock BF16 linear。
+## lutinayi_branch 与 wyb 审计
 
-## 当前候选设计
-
-| 模式 | Decode `N=1` | Prefill/其他 N | 失败处理 |
+| 分支锚点 | 可核验记录 | 实现状态 | 本轮处理 |
 |---|---|---|---|
-| `off` | 已测 BF16 LLMM1/stock | BF16 | 保底 |
-| `w8` | 六类精确 shape 逐项尝试 W8A16 HIP GEMV | 临时还原 BF16 后走现有 linear | 逐 shape 回退 BF16 |
-| `hybrid_w4` | 两个 MLP shape 先尝试 group-32 W4，其他尝试 W8 | 临时还原 BF16 | W4 → W8 → BF16 |
+| `origin/lutinayi_branch@5fec8013754dee2fbc3acb6274ef52e6418d8c00` | 最新记录 `13.04 / 10.08 / 5.78 tok/s`、**60.19 分**、无 SLA/精度扣分；相对 59.85 的组合改动为 `+0.34` 分 | 根目录可提交；默认 BF16、prefix cache、关日志、warmup×2、eager。KV FP8 记录为 8–16K `7.81 tok/s`，约 `-36%`；GQA/Graph/defrag 默认关闭 | 只采用原生 prefix cache 与关统计日志；不整段 cherry-pick launch，因为其中含锁定的 `--max-num-seqs 256` 和本轮不需要的 warmup/plugin 分支 |
+| `origin/wyb@f7dac25201f34435d27e25c25b5574fa1b6c251f` | `report.md` 吞吐表为空，`changelog.md` 明确写“待 DCU 平台验证” | 整个工程嵌套在子目录；`plugin.py` 不进入 launch；Attention 是标量 correctness baseline；KV allocator 明确是 metadata-only，defrag 不搬 KV tensor | 不合入代码；只保留“水位线、连续空闲块、受限 prefix 元数据”作为以后真实 vLLM allocator A/B 的设计提示 |
 
-候选 shape 为：
+注意：`lutinayi_branch` 的 `+0.34` 是 warmup、缓存和运行配置的组合差异，不是 prefix caching 或关日志的独立 A/B，因此本交接不虚构单项收益。`wyb` 没有平台成绩，不能用于分数预测。
 
-```text
-(16384, 5120)  (96, 5120)  (14336, 5120)
-(5120, 6144)   (34816, 5120)  (5120, 17408)
-```
+## Attention：为什么不借代码
 
-`scripts/build_gfx936_quant_jit.py` 将不依赖 Torch C++ 头文件的小型 HIP 源码编译到 `/tmp/fdu_gfx936_quant/<hash>.so`，超时为 45 秒。packed weight 与 scale 只存在当前推理进程的显存中，不写 checkpoint、模型目录或持久缓存。
+1. 当前 vendored ROCm backend 已读取 `num_kv_heads`，计算 `num_queries_per_kv`；HIP paged-attention 内核也直接使用 `gqa_ratio = num_heads / num_kv_heads`。Qwen 的 GQA 并不是未支持状态。
+2. `lutinayi_branch` 的 wrapper 只覆写 `_forward_encoder_attention`。Qwen3.5-27B 是 decoder-only，主 Decode paged-attention 不会进入该路径，所以默认关闭是正确的。
+3. `wyb` 的 HIP Attention 文件自称 scalar correctness baseline，没有 MFMA/LDS 双缓冲等面向 DCU 的高速实现；它也未由 launch/plugin 接入 vLLM，测试仅覆盖孤立 Python 接口。
 
-## 关键安全合同
+结论：本轮继续使用 vLLM 原生 ROCm paged attention。移植任一分支的 Attention 只会增加 dispatch、正确性和构建风险，没有可核验提分证据。
 
-1. 只接受真实 `gfx936`；`scripts/rocm_env.sh` 主动取消 `HSA_OVERRIDE_GFX_VERSION`。
-2. 启动仍固定 `--dtype bfloat16`，checkpoint 不转换、不替换。
-3. JIT、ABI 或 GPU smoke 失败时 `launch.sh` 回退 `off`。
-4. `scripts/scnet_ab_gfx936.sh` 要求服务日志声明的模式与请求模式完全一致；如果日志包含 `keeping BF16 path`，即使 `/health` 成功也判候选失败并停止进程。
-5. 首个真实 layer 对每个 `(M,K,kind)` 做数值与速度门禁，之后才复用决策；未通过的 layer 保留原 BF16 parameter。
-6. benchmark JSON 记录原仓库精确 40 位提交号和 HIP 源文件 SHA-256；实验副本不含 `.git` 也不会丢失 provenance。
-7. `FDU_GFX936_QUANT_MODE=off` 无需重编即可回到 66.8175 路径；`FDU_FORCE_STOCK_GEMM=1` 可进一步禁用 BF16 LLMM1。
+## KV Cache：借机制，不替换 allocator
 
-## 实现地图
+当前采用两项真实执行链优化：
 
-| 文件 | 责任 |
+- `--enable-prefix-caching` 使用 vLLM 自身的 block ownership、hash、refcount 和 eviction 机制；只有评测请求存在完整 block 公共前缀时才会命中，语义不变。默认开，`ENABLE_PREFIX_CACHING=0` 可独立关闭。
+- `vllm/v1/worker/block_table.py` 只在新增、移动、交换 block 或暴露可写 CPU 表后标记 dirty；无变化的 decode 步跳过重复 block-table H2D。
+
+不采用 `wyb` 的 16/64/256 “分层 block”与 defrag：其代码只改变 Python 元数据，未复制真实 KV tensor，也未原子更新 vLLM block table；把不同 token 容量映射到同一物理 block id 会破坏真实容量语义。单请求评测下，自定义 LRU/碎片整理的潜在收益也明显低于接入风险。
+
+KV FP8 继续关闭。`lutinayi_branch` 已记录 8–16K 吞吐降至 `7.81 tok/s`、TPOT 约 `117 ms`，说明该 ROCm 路径的量化/反量化成本超过 KV 带宽收益。
+
+## Linear、执行路径与其他取舍
+
+- **保留**：五个 BF16 LLMM1 shape，作为 W8 admission 基准与 fail-open 后备。
+- **保留**：选择性 W8；六个 shape 中只接纳 `1.19x–1.53x` 的五个，拒绝 `0.505x` 的 MLP shape。
+- **新增**：`--disable-log-stats`，配合已有 `--no-enable-log-requests`，只减少 Python 日志/统计开销，不改变请求语义。
+- **不新增 warmup**：`lutinayi_branch` 的两轮全档 warmup 只有组合 `+0.34` 分记录；当前 W8 prefill 还会临时还原 BF16 weight，长 warmup 会放大启动时间和显存峰值风险。
+- **不新增 Graph/AITER/scheduler 调参**：缺少 gfx936 当前候选的隔离收益，并可能触碰平台锁定项或改变 SLA 尾延迟。
+
+## W8 已有 microbenchmark
+
+| `(M,K)` | 最终选择 | speedup | 数值结果 |
+|---|---|---:|---|
+| `(16384,5120)` | W8 | 1.284x | 通过 |
+| `(96,5120)` | W8 | 1.332x | 通过 |
+| `(14336,5120)` | W8 | 1.219x | 通过 |
+| `(5120,6144)` | W8 | 1.529x | 通过 |
+| `(34816,5120)` | W8 | 1.192x | 通过 |
+| `(5120,17408)` | BF16 | 0.505x | W8 拒绝 |
+
+接纳项 NRMSE 约 `0.00447–0.00458`、cosine 约 `0.99999`。JIT 冷编译约 7 秒，ABI、GPU smoke 和 cache path 已通过。这些数据只证明单 kernel，不证明平台端到端得分。
+
+## 回滚矩阵
+
+| 目的 | 环境变量 |
 |---|---|
-| `csrc/fdu/gfx936_quant_gemv.hip` | W8/W4 GEMV 与 BF16 重构 C ABI |
-| `scripts/build_gfx936_quant_jit.py` | 45 秒超时、哈希、原子 `/tmp` JIT 缓存 |
-| `scripts/preflight_gfx936_quant.py` | 四符号 ABI 与小 shape GPU smoke |
-| `scripts/bench_gfx936_quant.py` | 六 shape 正确性、速度、显存和 provenance JSON |
-| `vllm/model_executor/layers/gfx936_online_quant.py` | mode/shape policy、packing、admission、ctypes runtime |
-| `vllm/model_executor/layers/linear.py` | load 后在线转换与 apply 分派 |
-| `vllm/model_executor/layers/utils.py` | opaque Torch custom op 和 BF16 LLMM1 fallback |
-| `vllm/model_executor/model_loader/utils.py` | 转换完成后释放 allocator cache |
-| `vllm/v1/worker/block_table.py` | 仅在 KV block 元数据变化后执行 block table H2D |
-| `launch.sh` | JIT/preflight/fail-open 启动合同 |
-| `scripts/scnet_ab_gfx936.sh` | 可复现的 off/W8/hybrid 服务与评测 wrapper |
+| 当前平台候选 | `FDU_GFX936_QUANT_MODE=w8 ENABLE_PREFIX_CACHING=1` |
+| 只关闭 prefix cache | `ENABLE_PREFIX_CACHING=0` |
+| 回到 66.8175 类 BF16/LLMM1 路径 | `FDU_GFX936_QUANT_MODE=off` |
+| 完全 stock BF16 linear | `FDU_GFX936_QUANT_MODE=off FDU_FORCE_STOCK_GEMM=1` |
 
-## SCNet 快速决策
+JIT、ABI 或 GPU smoke 失败时 `launch.sh` 自动把量化模式改为 `off`。`--disable-log-stats` 无数值影响，不单独设置回滚变量。
 
-先执行 [SCNET_RUN.md](SCNET_RUN.md) 的 0–4 节。W8 六 shape 全通过最理想；为了快速筛选，至少要求两个 MLP shape 和另外两个 shape 通过，其他 shape 必须明确保持 BF16。
+## 提交前只做本地检查
 
-W8 的第一轮端到端门槛：
-
-- 8–16K 三样本吞吐 `>= 12.60 tok/s`；
-- TTFT/TPOT P99 均 `< baseline × 1.45`；
-- 无 OOM、Traceback、非有限指标或静默回退；
-- 生成成功的服务 probe。
-
-只有 W8 有净收益时才测 hybrid。hybrid 需要两个 MLP W4 行通过 W4 数值门禁、各自比 W8 microbenchmark 快至少 1.05x，并且 8–16K 端到端再提高至少 3%。
-
-最终候选再跑三档各 3 条，以及 HotpotQA、Retrieval MultiPoint 各 3 条。选项只有：
-
-```text
-hybrid_w4 明确胜出 -> 选 hybrid_w4
-否则 w8 通过       -> 选 w8
-否则               -> 回退 off
+```bash
+python3 -m unittest discover -s tests/fdu -p 'test_*.py' -v
+python3 -m py_compile \
+  scripts/build_gfx936_quant_jit.py \
+  scripts/preflight_gfx936_quant.py \
+  scripts/bench_gfx936_quant.py \
+  vllm/model_executor/layers/gfx936_online_quant.py
+bash -n launch.sh scripts/rocm_env.sh scripts/scnet_ab_gfx936.sh
+git diff --check
+git status --short
+git rev-parse HEAD
 ```
 
-本轮按用户决策停止继续 SCNet，直接把 `w8` 作为平台候选；这是明确的风险接受，不等同于完成上述端到端门禁。`off` 仍是 66.8175 的即时回滚值。
-
-## 需要带回的证据
-
-- `/tmp/fdu_gfx936_quant_compile.log`
-- `/tmp/fdu_gfx936_quant_w8.json`
-- `/tmp/fdu_gfx936_quant_w8.log`
-- `/tmp/fdu_gfx936_w8.log`
-- `results/gfx936_skinny/throughput/w8-fast/8-16K.json`
-- 若测 hybrid，再带回 hybrid JSON、服务日志和 8–16K result JSON
-
-JSON 中必须能看到 `git_commit`、`hip_source_sha256`、设备/ROCm 信息、每个 shape 的 kind、NRMSE、cosine、BF16/candidate latency、speedup、峰值显存与 admission 原因。
+平台提交时绑定 `dx_branch`；GitLab 不稳定时，使用已同步同一提交的 GitHub `main`。平台返回后必须记录：精确 commit、三档 throughput、TTFT P99、TPOT P99、四项精度与最终得分。
 
 ## 历史 no-go
 
-- `wvSplitK`：gfx936 直接 benchmark 未通过，当前不再扩展；BF16 保底用已测 LLMM1。
-- AWQ/预量化模型、bitsandbytes、持久 INT4/FP8：不属于当前路径，存在规则或 gfx936 kernel 风险。
-- vendor FP8 / `torch._scaled_mm`：本设备类没有已证明可用的稳定快路径。
-- AITER、KV FP8、旧 GQA/HIP Graph、scheduler 调参：未证明净收益且会污染本轮单变量判断。
-- 历史 `fdu_vllm/` 插件链：当前 `FDU_ENABLE=0`，不作为平台激活机制。
+- `wvSplitK`：gfx936 benchmark 未通过；BF16 保底继续使用已测 LLMM1。
+- AWQ、bitsandbytes、持久 INT4/FP8：规则或 gfx936 kernel 风险，不进入当前路径。
+- vendor FP8 / `torch._scaled_mm`：当前设备类没有已证明稳定快路径。
+- AITER、KV FP8、旧 GQA/HIP Graph、metadata-only defrag、scheduler 参数：无当前 gfx936 净收益证据或已有负优化。
+- 历史 `fdu_vllm/` 插件链：`FDU_ENABLE=0`，不作为平台激活机制。
 
-旧实验仍保留在 `changelog.md` 和 `docs/superpowers/` 供复盘，但不应再用于 SCNet 操作。
+完整 SCNet 历史操作仅查 [SCNET_RUN.md](SCNET_RUN.md)；本轮不再执行 SCNet。

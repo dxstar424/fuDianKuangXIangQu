@@ -1,6 +1,6 @@
 # gfx936 当前环境变量
 
-当前提交以原生 `gfx936`、原始 BF16 checkpoint 和已测 BF16 LLMM1 路径为保底，并默认启用选择性 W8 平台盲测。每个 shape 仍必须通过进程内数值/速度 admission；失败项保持 BF16。
+当前提交以原生 `gfx936`、原始 BF16 checkpoint 和已测 BF16 LLMM1 路径为保底，并默认启用选择性 W8 平台盲测与 vLLM 原生 prefix caching。每个 shape 仍必须通过进程内数值/速度 admission；失败项保持 BF16。
 
 ## 启动变量
 
@@ -14,6 +14,7 @@
 | `VLLM_ROCM_USE_AITER` | `0` | 当前 A/B 禁用 AITER |
 | `FDU_ENABLE` | `0` | 禁用历史 `fdu_vllm` 插件钩子 |
 | `FDU_GFX936_QUANT_MODE` | `w8` | 选择性在线 W8 平台候选，见下表 |
+| `ENABLE_PREFIX_CACHING` | `1` | 启用 vLLM 原生 prefix cache；设为 `0` 可独立回滚 |
 | `FDU_CACHE_ROOT` | `/public/home/xdzs2026_c415/cache` | vLLM/Triton/MIOpen 持久缓存根目录 |
 
 `FDU_GFX936_QUANT_MODE` 的允许值：
@@ -51,11 +52,14 @@ unset HSA_OVERRIDE_GFX_VERSION ROCBLAS_LAYER
 
 `launch.sh` 在读入 Qwen3.5-27B 前验证当前 venv、原生 `gfx936`、vLLM 扩展以及 BF16 LLMM1 必需符号。量化模式非 `off` 时，还要求 JIT 在 45 秒内完成并通过四个 ABI 符号和 GPU smoke test。
 
+`ENABLE_PREFIX_CACHING=1` 只追加 vLLM 官方 `--enable-prefix-caching`，复用引擎自身的 block hash、refcount 与 eviction；不使用历史 `fdu_vllm/kv_cache.py` 或 `wyb` 的 metadata-only allocator。是否提速取决于评测请求是否存在完整 block 公共前缀，当前没有独立 A/B。启动固定追加 `--disable-log-stats`，与已有 `--no-enable-log-requests` 一起减少 Python 日志开销。
+
 立即回到已测保底路径：
 
 ```bash
 export FDU_GFX936_QUANT_MODE=off
 export FDU_FORCE_STOCK_GEMM=0
+export ENABLE_PREFIX_CACHING=1
 bash launch.sh
 ```
 
@@ -64,5 +68,6 @@ bash launch.sh
 ```bash
 export FDU_GFX936_QUANT_MODE=off
 export FDU_FORCE_STOCK_GEMM=1
+export ENABLE_PREFIX_CACHING=0
 bash launch.sh
 ```
