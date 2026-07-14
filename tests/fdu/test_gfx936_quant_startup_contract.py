@@ -97,12 +97,12 @@ class Gfx936QuantStartupContractTest(unittest.TestCase):
         self.assertLess(builder, quant_preflight)
         self.assertLess(quant_preflight, change_directory)
 
-    def test_quant_mode_defaults_off_in_environment_and_image(self) -> None:
+    def test_quant_mode_defaults_w8_in_environment_and_image(self) -> None:
         self.assertIn(
-            'FDU_GFX936_QUANT_MODE="${FDU_GFX936_QUANT_MODE:-off}"',
+            'FDU_GFX936_QUANT_MODE="${FDU_GFX936_QUANT_MODE:-w8}"',
             _read(ROCM_ENV),
         )
-        self.assertIn("FDU_GFX936_QUANT_MODE=off", _read(DOCKERFILE))
+        self.assertIn("FDU_GFX936_QUANT_MODE=w8", _read(DOCKERFILE))
 
 
 if __name__ == "__main__":

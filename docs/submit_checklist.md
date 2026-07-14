@@ -39,9 +39,11 @@ git diff --check
 
 ## 默认模式选择
 
+> 本次提交例外：用户决定停止继续 SCNet，以 66.8175 为回滚基准，直接平台盲测选择性 W8。五个 shape 的已有 microbenchmark 为 `1.19x–1.53x`，`(5120,17408)` 自动拒绝并保留 BF16；端到端 SLA 与精度风险留给平台评测。
+
 - [ ] hybrid 只有在两个 MLP W4 数值通过、各自比 W8 microbenchmark `>=1.05x`，并且端到端 8–16K 比 W8 `>=1.03x` 时才可选。
 - [ ] 否则 W8 只有在 8–16K `>=12.60 tok/s`、三档/SLA/精度通过且加权投影高于 66.8175 时才可选。
-- [ ] 否则 `scripts/rocm_env.sh` 和 Dockerfile 继续保持 `FDU_GFX936_QUANT_MODE=off`。
+- [ ] 盲测提交将 `scripts/rocm_env.sh` 和 Dockerfile 同步设为 `FDU_GFX936_QUANT_MODE=w8`；回滚提交恢复 `off`。
 - [ ] 如果修改默认模式，同一提交同步更新 `docs/env_vars.md`、`docs/GFX936_HANDOFF.md`、`report.md` 和 `changelog.md`。
 
 ## 平台结果

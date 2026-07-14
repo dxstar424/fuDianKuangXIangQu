@@ -45,7 +45,7 @@ class NoActiveQuantizationTest(unittest.TestCase):
         self.assertNotIn("HSA_OVERRIDE_GFX_VERSION=", env_doc)
         self.assertNotIn("pkill -f", run_doc)
 
-    def test_active_docs_describe_the_online_quant_gate_and_safe_default(self) -> None:
+    def test_active_docs_describe_selective_w8_and_bf16_rollback(self) -> None:
         readme = (ROOT / "README.md").read_text()
         env_doc = (ROOT / "docs/env_vars.md").read_text()
         run_doc = (ROOT / "docs/SCNET_RUN.md").read_text()
@@ -55,7 +55,8 @@ class NoActiveQuantizationTest(unittest.TestCase):
             self.assertIn("FDU_GFX936_QUANT_MODE", document)
         self.assertIn("quant-bench-w8", run_doc)
         self.assertIn("默认", env_doc)
-        self.assertIn("off", env_doc)
+        self.assertIn("`w8`", env_doc)
+        self.assertIn("`off`", env_doc)
         self.assertNotIn("src/fdu_vllm/                   # vLLM 插件入口（主要改动区）", readme)
 
     def test_report_and_changelog_mark_old_routes_historical(self) -> None:

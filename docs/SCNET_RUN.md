@@ -130,7 +130,7 @@ W8 继续条件：
 - `/tmp/fdu_gfx936_w8.log` 没有 OOM、Traceback、非有限指标或 `keeping BF16 path`；
 - 日志确认高字节量 shape 的量化层已被接纳；被拒 shape 明确回退 BF16。
 
-三条样本只用于方向判断，不是最终分数。如果 W8 不满足以上条件，执行 `bash scripts/scnet_ab_gfx936.sh stop` 并保留默认 `off`。
+三条样本只用于方向判断，不是最终分数。如果 W8 不满足以上条件，执行 `bash scripts/scnet_ab_gfx936.sh stop` 并显式回滚为 `off`。
 
 ## 5. 仅在 W8 有收益时尝试 hybrid W4
 
@@ -224,4 +224,4 @@ bash scripts/scnet_ab_gfx936.sh stop
 /public/home/xdzs2026_c415/results/gfx936_skinny/throughput/hybrid-fast/8-16K.json
 ```
 
-最终选择规则只有三种：hybrid 明确胜出则选 `hybrid_w4`；否则 W8 通过则选 `w8`；否则保持 `off`。拿到证据后再改 `scripts/rocm_env.sh` 与 `Dockerfile` 的默认值。
+通常的最终选择规则只有三种：hybrid 明确胜出则选 `hybrid_w4`；否则 W8 通过则选 `w8`；否则保持 `off`。本轮已停止继续 SCNet，并在记录风险后直接把选择性 `w8` 交给平台盲测。

@@ -66,7 +66,7 @@ fi
 
 "$PYTHON_BIN" "${PREFLIGHT_ARGS[@]}"
 
-case "${FDU_GFX936_QUANT_MODE:-off}" in
+case "${FDU_GFX936_QUANT_MODE:-w8}" in
     off|w8|hybrid_w4) ;;
     *)
         echo "[fdu] invalid gfx936 quant mode; keeping BF16 path" >&2

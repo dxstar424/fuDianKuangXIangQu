@@ -366,9 +366,8 @@ class EnvContractTest(unittest.TestCase):
         ]
         self.assertEqual(len(declarations), 1)
         declaration = declarations[0]
-        self.assertEqual(
-            ast.dump(declaration.annotation), ast.dump(ast.Name(id="bool"))
-        )
+        self.assertIsInstance(declaration.annotation, ast.Name)
+        self.assertEqual(declaration.annotation.id, "bool")
         self.assertIsInstance(declaration.value, ast.Constant)
         self.assertIs(declaration.value.value, False)
 

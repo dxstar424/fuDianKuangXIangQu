@@ -1,6 +1,6 @@
 # gfx936 当前环境变量
 
-当前提交以原生 `gfx936`、原始 BF16 checkpoint 和已测 BF16 LLMM1 路径为保底。在线量化必须经过 SCNet 门禁，默认保持关闭。
+当前提交以原生 `gfx936`、原始 BF16 checkpoint 和已测 BF16 LLMM1 路径为保底，并默认启用选择性 W8 平台盲测。每个 shape 仍必须通过进程内数值/速度 admission；失败项保持 BF16。
 
 ## 启动变量
 
@@ -13,18 +13,20 @@
 | `FDU_FORCE_STOCK_GEMM` | `0` | 设为 `1` 时所有 BF16 linear 回退 stock |
 | `VLLM_ROCM_USE_AITER` | `0` | 当前 A/B 禁用 AITER |
 | `FDU_ENABLE` | `0` | 禁用历史 `fdu_vllm` 插件钩子 |
-| `FDU_GFX936_QUANT_MODE` | `off` | 在线量化模式，见下表 |
+| `FDU_GFX936_QUANT_MODE` | `w8` | 选择性在线 W8 平台候选，见下表 |
 | `FDU_CACHE_ROOT` | `/public/home/xdzs2026_c415/cache` | vLLM/Triton/MIOpen 持久缓存根目录 |
 
 `FDU_GFX936_QUANT_MODE` 的允许值：
 
 | 值 | 行为 |
 |---|---|
-| `off` | 默认；保持已测 BF16/LLMM1 路径 |
-| `w8` | 六类精确 shape 逐项做 W8 数值和速度门禁；不通过的 shape 保持 BF16 |
+| `off` | 立即回到已测 BF16/LLMM1 路径 |
+| `w8` | 默认；六类精确 shape 逐项做 W8 数值和速度门禁；不通过的 shape 保持 BF16 |
 | `hybrid_w4` | 两个 MLP shape 先尝试 group-32 W4，再回退 W8/BF16；其余 shape 尝试 W8 |
 
 未知值会被改为 `off`。JIT 编译、预检或 ABI 失败也会在加载模型前回退 `off`；SCNet 启动脚本会把这种 fail-open 视为候选失败，不会误报候选健康。
+
+已有 gfx936 microbenchmark 中，W8 接纳 `(16384,5120)`、`(96,5120)`、`(14336,5120)`、`(5120,6144)`、`(34816,5120)`，速度比分别约为 `1.284x`、`1.332x`、`1.219x`、`1.529x`、`1.192x`。`(5120,17408)` 仅 `0.505x`，运行时 admission 会拒绝它并保留 stock BF16。该证据不是端到端平台结果。
 
 ## 内部证据变量
 

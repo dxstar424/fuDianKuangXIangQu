@@ -7,7 +7,7 @@
 
 - `dx_branch` 已记录平台得分 66.8175，SLA 与精度扣分均为 0；评测提交 hash 尚未随结果记录。若对应 `88b7d10` 或其后继，则包含原生 gfx936 + BF16 + 5 个 N=1 LLMM1 shape，但不能量化 LLMM1 的独立贡献。
 - 在线 W8 与 selective W4 的实现已合入主工作区，代码锚点为 `1dc9f46`；交付提交请以 `git rev-parse HEAD` 为准。
-- `FDU_GFX936_QUANT_MODE` 默认仍是 `off`。W8/W4 尚无 SCNet 端到端数据，不能声称已提速。
+- `FDU_GFX936_QUANT_MODE` 默认改为选择性 `w8`，用于本次无额外 SCNet 的平台盲测；五个 shape 已通过 microbenchmark，`(5120,17408)` 自动拒绝。W8 仍无端到端数据，不能声称已提分。
 - 最快验证顺序是：复用 wheel → 45 秒 JIT 门禁 → 六 shape W8 → 一次 8–16K 三样本 → 有收益才试 hybrid → 胜者短验。
 - 完整可复制命令只认 [SCNET_RUN.md](SCNET_RUN.md)。
 
@@ -86,10 +86,10 @@ W8 的第一轮端到端门槛：
 ```text
 hybrid_w4 明确胜出 -> 选 hybrid_w4
 否则 w8 通过       -> 选 w8
-否则               -> 保持 off
+否则               -> 回退 off
 ```
 
-在完成以上证据前，不修改 Dockerfile 与 `scripts/rocm_env.sh` 的默认 `off`。
+本轮按用户决策停止继续 SCNet，直接把 `w8` 作为平台候选；这是明确的风险接受，不等同于完成上述端到端门禁。`off` 仍是 66.8175 的即时回滚值。
 
 ## 需要带回的证据
 

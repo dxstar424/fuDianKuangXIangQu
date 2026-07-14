@@ -4,14 +4,15 @@
 
 ## 当前路线
 
-当前安全默认值是：
+当前平台盲测候选是：
 
 ```text
 原始 BF16 checkpoint
   -> 原生 gfx936 wheel
-  -> 5 个 SCNet 已验证的 N=1 shape 使用 BF16 LLMM1
-  -> 其他 shape 使用 stock BF16 linear
-  -> FDU_GFX936_QUANT_MODE=off
+  -> FDU_GFX936_QUANT_MODE=w8
+       -> 5 个 SCNet microbenchmark 已接纳 shape 使用 W8A16 JIT GEMV
+       -> (5120, 17408) 自动拒绝并保留 stock BF16 linear
+  -> JIT/ABI/smoke/admission 任一失败时回退 BF16/LLMM1
 ```
 
 `dx_branch` 最近一次记录的平台结果为：
@@ -31,13 +32,13 @@
 
 | `FDU_GFX936_QUANT_MODE` | 行为 |
 |---|---|
-| `off`（默认） | 当前 BF16/LLMM1 保底实现 |
-| `w8` | 通过门禁的 shape 使用 W8A16 N=1 GEMV |
+| `off` | 当前 BF16/LLMM1 保底实现，66.8175 回滚路径 |
+| `w8`（默认） | 通过门禁的 shape 使用 W8A16 N=1 GEMV |
 | `hybrid_w4` | 两个 MLP shape 优先 group-32 W4，其余使用 W8；逐 shape 失败回退 |
 
 量化候选只在运行进程的显存中生成 packed weight 和 scale，不修改 checkpoint，也不把量化权重写入模型目录或持久目录。N=1 decode 使用自定义 HIP GEMV；prefill 临时还原 BF16 后走现有 linear。编译、ABI、数值或速度门禁失败时保持 BF16 路径。
 
-W8/W4 尚未取得 SCNet 端到端数据，因此不能声称已经提速，也不会在实测前把默认值从 `off` 改掉。最快验证步骤见 [docs/SCNET_RUN.md](docs/SCNET_RUN.md)。
+W8 六 shape microbenchmark 已得到 5 个接纳、1 个拒绝；接纳项相对当前 BF16/LLMM1 为 `1.19x–1.53x`，`(5120,17408)` 仅 `0.505x`，因此明确保持 BF16。按本轮“停止 SCNet、直接平台盲测”的决策，默认改为选择性 `w8`；尚无端到端吞吐、SLA 或精度结论，不能把 microbenchmark 写成平台提分。
 
 ## 关键实现
 

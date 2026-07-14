@@ -60,14 +60,14 @@ class RuntimeContractTest(unittest.TestCase):
         self.assertNotRegex(text, r"\$\{[^}]*,,\}")
         self.assertRegex(text, r"1\|\[Tt\]\[Rr\]\[Uu\]\[Ee\]")
 
-    def test_rocm_env_uses_conservative_defaults(self) -> None:
+    def test_rocm_env_uses_selective_w8_platform_candidate(self) -> None:
         text = _read(ROCM_ENV)
         expected_defaults = {
             "FDU_ENABLE": "0",
             "VLLM_ROCM_USE_AITER": "0",
             "VLLM_ROCM_USE_SKINNY_GEMM": "1",
             "FDU_FORCE_STOCK_GEMM": "0",
-            "FDU_GFX936_QUANT_MODE": "off",
+            "FDU_GFX936_QUANT_MODE": "w8",
         }
         for name, default in expected_defaults.items():
             with self.subTest(name=name):
