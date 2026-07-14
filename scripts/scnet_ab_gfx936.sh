@@ -120,7 +120,10 @@ sync_candidate_python() {
         source="$SOURCE_ROOT/vllm/$relative"
         destination="$package_root/$relative"
         require_file "$source"
-        require_file "$destination"
+        [[ -d "$(dirname "$destination")" ]] || {
+            echo "missing candidate destination directory: $(dirname "$destination")" >&2
+            exit 2
+        }
         cp "$source" "$destination"
         copied+=("$destination")
     done

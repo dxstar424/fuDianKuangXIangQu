@@ -53,6 +53,11 @@ class ScnetAbGfx936FastPathContractTest(unittest.TestCase):
         self.assertIn("LLMM1", self.text)
         self.assertIn("run build-candidate once", self.text)
 
+    def test_sync_allows_new_destination_files_but_requires_parent(self) -> None:
+        self.assertIn('require_file "$source"', self.text)
+        self.assertNotIn('require_file "$destination"', self.text)
+        self.assertIn('[[ -d "$(dirname "$destination")" ]]', self.text)
+
     def test_quant_bench_preflights_and_uses_exact_settings_and_outputs(self) -> None:
         self.assertIn("build_gfx936_quant_jit.py", self.text)
         self.assertIn("preflight_gfx936_quant.py", self.text)
