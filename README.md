@@ -40,6 +40,8 @@
 
 W8 六 shape microbenchmark 已得到 5 个接纳、1 个拒绝；接纳项相对当前 BF16/LLMM1 为 `1.19x–1.53x`，`(5120,17408)` 仅 `0.505x`，因此明确保持 BF16。按本轮“停止 SCNet、直接平台盲测”的决策，默认改为选择性 `w8`；尚无端到端吞吐、SLA 或精度结论，不能把 microbenchmark 写成平台提分。
 
+Decode 执行路径另加 KV block table 脏提交：只有新增、移动或交换 KV block 时才把 CPU block table 复制到 GPU。默认 block size 为 16，稳定单请求 decode 通常可跳过约 15/16 次重复 H2D；不改变 KV 内容、块大小、Attention 数值或分配策略。该项只有静态/状态机测试，平台收益仍待跑分。
+
 ## 关键实现
 
 ```text
@@ -55,6 +57,7 @@ vllm/model_executor/layers/gfx936_online_quant.py
 vllm/model_executor/layers/linear.py
 vllm/model_executor/layers/utils.py
 vllm/model_executor/layers/rocm_skinny_shapes.py
+vllm/v1/worker/block_table.py
 
 docs/SCNET_RUN.md
 docs/GFX936_HANDOFF.md

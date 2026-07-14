@@ -75,6 +75,12 @@ W8 门禁：输出有限、NRMSE `<=0.015`、cosine `>=0.999`、相对 BF16/LLMM
 
 W4 门禁：输出有限、NRMSE `<=0.08`、cosine `>=0.995`、相对 BF16 至少 `1.10x`。进入端到端 hybrid 测试前还要求两个 MLP W4 行各自比 W8 microbenchmark 至少快 `1.05x`。
 
+## 优化 4：KV block table 脏提交
+
+`vllm/v1/worker/block_table.py` 原先在每个模型步都执行完整 block table H2D，即使本 token 没有分配新 KV block。当前实现只在 `append_row`、`add_row`、`move_row` 或 `swap_row` 后标记 dirty，并在首次 `commit_block_table` 后清除标记；无变化时直接跳过复制。
+
+默认 16-token block 下，稳定单请求 decode 通常每 16 token 才追加一个 block，因此理论上约 15/16 步可省去该元数据 H2D。它不修改 block size、KV 地址、slot mapping 或 Attention kernel，只减少冗余执行路径；没有 DCU 端到端数据，不声明实际 TPOT 提升。
+
 ## 编译、证据与失败处理
 
 JIT 源码不包含 Torch、ATen、pybind11 或 vLLM C++ 头文件；编译参数固定为原生 gfx936，并以源码、编译器身份和 flags 的哈希作为 `/tmp` 缓存键。临时文件成功后原子 rename，超时/失败会清理半成品。

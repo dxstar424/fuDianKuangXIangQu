@@ -69,6 +69,10 @@ class BlockTable:
             self.max_num_reqs, self.max_num_blocks_per_req, dtype=torch.int32
         )
         self.num_blocks_per_row = np.zeros(max_num_reqs, dtype=np.int32)
+        # CPU and GPU buffers start with identical zeros. Decode normally adds
+        # one KV block only once per block_size tokens, so avoid copying the
+        # unchanged table on every intervening token.
+        self._block_table_dirty = False
 
         self.slot_mapping = self._make_buffer(
             self.max_num_batched_tokens, dtype=torch.int64
@@ -114,9 +118,11 @@ class BlockTable:
         start = self.num_blocks_per_row[row_idx]
         self.num_blocks_per_row[row_idx] += num_blocks
         self.block_table.np[row_idx, start : start + num_blocks] = block_ids
+        self._block_table_dirty = True
 
     def add_row(self, block_ids: list[int], row_idx: int) -> None:
         self.num_blocks_per_row[row_idx] = 0
+        self._block_table_dirty = True
         self.append_row(block_ids, row_idx)
 
     def move_row(self, src: int, tgt: int) -> None:
@@ -124,11 +130,13 @@ class BlockTable:
         block_table_np = self.block_table.np
         block_table_np[tgt, :num_blocks] = block_table_np[src, :num_blocks]
         self.num_blocks_per_row[tgt] = num_blocks
+        self._block_table_dirty = True
 
     def swap_row(self, src: int, tgt: int) -> None:
         src_tgt, tgt_src = [src, tgt], [tgt, src]
         self.num_blocks_per_row[src_tgt] = self.num_blocks_per_row[tgt_src]
         self.block_table.np[src_tgt] = self.block_table.np[tgt_src]
+        self._block_table_dirty = True
 
     def compute_slot_mapping(
         self, req_indices: np.ndarray, positions: np.ndarray
@@ -191,7 +199,10 @@ class BlockTable:
             )
 
     def commit_block_table(self, num_reqs: int) -> None:
+        if not self._block_table_dirty:
+            return
         self.block_table.copy_to_gpu(num_reqs)
+        self._block_table_dirty = False
 
     def commit_slot_mapping(self, num_tokens: int) -> None:
         self.slot_mapping.copy_to_gpu(num_tokens)
@@ -199,6 +210,7 @@ class BlockTable:
     def clear(self) -> None:
         self.block_table.gpu.fill_(0)
         self.block_table.cpu.fill_(0)
+        self._block_table_dirty = False
 
     @staticmethod
     def map_to_kernel_blocks(
@@ -236,10 +248,15 @@ class BlockTable:
 
     def get_cpu_tensor(self) -> torch.Tensor:
         """Returns the CPU tensor of the block table."""
+        # The returned tensor is mutable. Conservatively assume the caller may
+        # update it before the next commit.
+        self._block_table_dirty = True
         return self.block_table.cpu
 
     def get_numpy_array(self) -> np.ndarray:
         """Returns the numpy array of the block table."""
+        # The returned view is mutable and aliases the CPU tensor.
+        self._block_table_dirty = True
         return self.block_table.np
 
     def _make_buffer(

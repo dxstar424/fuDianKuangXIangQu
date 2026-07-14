@@ -65,6 +65,7 @@
 | `vllm/model_executor/layers/linear.py` | load 后在线转换与 apply 分派 |
 | `vllm/model_executor/layers/utils.py` | opaque Torch custom op 和 BF16 LLMM1 fallback |
 | `vllm/model_executor/model_loader/utils.py` | 转换完成后释放 allocator cache |
+| `vllm/v1/worker/block_table.py` | 仅在 KV block 元数据变化后执行 block table H2D |
 | `launch.sh` | JIT/preflight/fail-open 启动合同 |
 | `scripts/scnet_ab_gfx936.sh` | 可复现的 off/W8/hybrid 服务与评测 wrapper |
 

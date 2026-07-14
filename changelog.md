@@ -7,8 +7,9 @@
 - 以已记录的 66.8175 BF16/LLMM1 路径作为 `FDU_GFX936_QUANT_MODE=off` 回滚基准。
 - 根据已有 gfx936 microbenchmark，默认切换到 `w8`：五个 shape 相对 BF16/LLMM1 为 `1.19x–1.53x` 并通过数值门禁；`(5120,17408)` 仅 `0.505x`，由 admission 自动拒绝并保留 stock BF16。
 - 不启用未验证的 W4、block size 32、AITER、KV FP8 或 scheduler 参数；JIT/ABI/smoke/逐 shape admission 任一失败仍 fail-open 到 BF16。
+- 增加 KV block table 脏提交：新增/移动/交换 block 后才执行 H2D，默认 16-token block 的稳定单请求 decode 可跳过绝大多数重复表复制；不改变 KV 或 Attention 数值。
 - 按用户决策停止继续 SCNet，直接使用平台完整评测判断吞吐、TTFT/TPOT SLA 与四项精度；当前不声明平台提分。
-- 修复 Python 3.10/3.11 间 `ast.dump(Name)` 上下文差异导致的契约测试误报。
+- 修复不同 Python 版本间 `ast.dump(Name)` 上下文差异导致的契约测试误报。
 
 ## [v1.3.0-gfx936-online-quant] - 2026-07-14
 
